@@ -20,5 +20,7 @@ export class ContextUniform {
     this.uniformArray[5] = mouse.ry;
     this.uniformArray[6] = time.now;
     this.uniformArray[7] = time.delta;
+
+    device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformArray);
   }
 }

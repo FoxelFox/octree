@@ -48,12 +48,10 @@ export class Post {
     this.resizeFrameBuffer();
   }
 
-  render() {
+  update() {
     if (this.frameBuffers[0].width !== canvas.width || this.frameBuffers[0].height !== canvas.height) {
       this.resizeFrameBuffer();
     }
-
-    device.queue.writeBuffer(contextUniform.uniformBuffer, 0, contextUniform.uniformArray);
 
     const commandEncoder = device.createCommandEncoder();
     const passEncoder = commandEncoder.beginRenderPass({

@@ -1,6 +1,7 @@
 import { GPUContext } from "./gpu";
 import { Post } from "./pipeline/post";
 import { ContextUniform } from "./data/context";
+import { Octree } from "./pipeline/octree";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -14,7 +15,7 @@ export const contextUniform = new ContextUniform();
 
 
 const uniforms = [contextUniform];
-const pipelines = [new Post()];
+const pipelines = [new Octree(), new Post()];
 
 loop();
 
@@ -29,7 +30,7 @@ function loop() {
   }
 
   for(const pipeline of pipelines) {
-    pipeline.render();
+    pipeline.update();
   }
-  requestAnimationFrame(loop);
+  //requestAnimationFrame(loop);
 }
