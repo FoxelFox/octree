@@ -1,7 +1,7 @@
-import { GPUContext } from "./gpu";
-import { Post } from "./pipeline/post";
-import { ContextUniform } from "./data/context";
-import { Octree } from "./pipeline/octree";
+import {GPUContext} from "./gpu";
+import {Post} from "./pipeline/post";
+import {ContextUniform} from "./data/context";
+import {Noise} from "./pipeline/noise";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -15,7 +15,7 @@ export const contextUniform = new ContextUniform();
 
 
 const uniforms = [contextUniform];
-const pipelines = [new Octree(), new Post()];
+const pipelines = [new Noise(), new Post()];
 
 loop();
 
@@ -23,14 +23,22 @@ loop();
 document.getElementsByTagName('canvas')[0].setAttribute('style', 'position: fixed;')
 
 function loop() {
-  gpu.update();
+	gpu.update();
 
-  for(const uniform of uniforms) {
-    uniform.update();
-  }
+	for (const uniform of uniforms) {
+		uniform.update();
+	}
 
-  for(const pipeline of pipelines) {
-    pipeline.update();
-  }
-  //requestAnimationFrame(loop);
+	const updateEncoder = device.createCommandEncoder();
+	for (const pipeline of pipelines) {
+		pipeline.update(updateEncoder);
+	}
+	device.queue.submit([updateEncoder.finish()]);
+
+
+	for (const pipeline of pipelines) {
+		pipeline.afterUpdate(undefined);
+	}
+
+	//requestAnimationFrame(loop);
 }
