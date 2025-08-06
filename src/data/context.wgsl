@@ -4,4 +4,6 @@ struct Context {
   mouse_rel: vec2<f32>,
   time: f32,
   delta: f32,
+  view: mat4x4<f32>,
+  perspective: mat4x4<f32>,
 }

@@ -2,6 +2,7 @@ import {GPUContext} from "./gpu";
 import {Post} from "./pipeline/post";
 import {ContextUniform} from "./data/context";
 import {Noise} from "./pipeline/noise";
+import {Block} from "./pipeline/block";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -15,7 +16,14 @@ export const contextUniform = new ContextUniform();
 
 
 const uniforms = [contextUniform];
-const pipelines = [new Noise(), new Post()];
+
+const noise = new Noise();
+const post = new Post();
+const block = new Block();
+
+block.noise  = noise;
+
+const pipelines = [noise, block];
 
 loop();
 
@@ -37,8 +45,8 @@ function loop() {
 
 
 	for (const pipeline of pipelines) {
-		pipeline.afterUpdate(undefined);
+		pipeline.afterUpdate();
 	}
 
-	//requestAnimationFrame(loop);
+	requestAnimationFrame(loop);
 }

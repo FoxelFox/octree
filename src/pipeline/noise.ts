@@ -11,6 +11,9 @@ export class Noise {
 	bindGroup1: GPUBindGroup
 	readbackBuffer: GPUBuffer
 
+	// output
+	result: Uint32Array;
+
 	constructor() {
 		const size = Math.pow(this.gridSize, 3) * 4;
 		this.noiseBuffer = device.createBuffer({
@@ -63,6 +66,11 @@ export class Noise {
 
 	update(commandEncoder: GPUCommandEncoder) {
 
+
+		if(this.result) {
+			return;
+		}
+
 		const computePass = commandEncoder.beginComputePass();
 		computePass.setPipeline(this.pipeline);
 		computePass.setBindGroup(0, this.bindGroup0);
@@ -80,10 +88,15 @@ export class Noise {
 
 	}
 
-	afterUpdate(commandEncoder: GPUCommandEncoder) {
+	afterUpdate() {
+
+		if (this.result) {
+			return;
+		}
+
 		this.readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-			const result = new Uint32Array(this.readbackBuffer.getMappedRange());
-			console.log("Noise:", result)
+			this.result = new Uint32Array(this.readbackBuffer.getMappedRange());
+			console.log("Noise:", this.result);
 			this.readbackBuffer.unmap();
 		});
 	}

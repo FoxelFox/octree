@@ -75,7 +75,7 @@ export class Post {
 		this.frame++
 	}
 
-	afterUpdate(commandEncoder: GPUCommandEncoder) {
+	afterUpdate() {
 
 	}
 
