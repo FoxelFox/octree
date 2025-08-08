@@ -7,7 +7,9 @@ import {Block} from "./pipeline/block";
 export const gpu = new GPUContext();
 await gpu.init();
 
-export const gridSize = 4;
+export const maxDepth = 2;
+export const gridSize = Math.pow(2, maxDepth);
+export const worstCaseMaxNodes = Math.floor((Math.pow(8, maxDepth + 1) -1)/ 7);
 export const device = gpu.device;
 export const context = gpu.context;
 export const canvas = gpu.canvas;
@@ -16,13 +18,17 @@ export const time = gpu.time;
 export const contextUniform = new ContextUniform();
 
 
+console.log('maxDepth:', maxDepth);
+console.log('gridSize:', gridSize)
+
 const uniforms = [contextUniform];
 
 const noise = new Noise();
 const post = new Post();
 const block = new Block();
 
-block.noise  = noise;
+block.noise = noise;
+post.noise = noise;
 
 const pipelines = [noise, block, post];
 

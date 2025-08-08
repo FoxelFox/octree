@@ -1,10 +1,12 @@
 import {device, context, canvas, contextUniform} from "../index";
+import {Noise} from "./noise";
 import shader from "./post.wgsl" with {type: "text"};
 
 export class Post {
 	pipeline: GPURenderPipeline;
 
 	uniformBindGroup: GPUBindGroup;
+	noise: Noise;
 
 	frameBuffers: GPUTexture[] = [];
 	frameBufferBindgroups: GPUBindGroup[] = [];
@@ -48,19 +50,37 @@ export class Post {
 			}
 		});
 
-		this.uniformBindGroup = device.createBindGroup({
-			layout: this.pipeline.getBindGroupLayout(0),
-			entries: [{
-				binding: 0,
-				resource: {buffer: contextUniform.uniformBuffer}
-			}]
-		});
+		// Will be created in init() after noise is set
 
 
 		this.resizeFrameBuffer();
 	}
 
+	init() {
+		if (!this.noise) {
+			throw new Error('Noise must be set before calling init()');
+		}
+
+		this.uniformBindGroup = device.createBindGroup({
+			layout: this.pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer}
+				},
+				{
+					binding: 1,
+					resource: {buffer: this.noise.nodesBuffer}
+				}
+			]
+		});
+	}
+
 	update(commandEncoder: GPUCommandEncoder) {
+		if (!this.uniformBindGroup) {
+			this.init();
+		}
+
 		if (this.frameBuffers[0].width !== canvas.width || this.frameBuffers[0].height !== canvas.height) {
 			this.resizeFrameBuffer();
 		}

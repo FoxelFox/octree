@@ -1,18 +1,22 @@
-import {contextUniform, device, gridSize} from "..";
+import {contextUniform, device, gridSize, worstCaseMaxNodes} from "..";
 import shader from "./noise.wgsl" with {type: "text"};
 
 export class Noise {
 
 	noiseBuffer: GPUBuffer
+	nodeCounterBuffer: GPUBuffer
+	nodesBuffer: GPUBuffer
 	uniformBuffer: GPUBuffer
 	pipeline: GPUComputePipeline
 	bindGroup0: GPUBindGroup
 	bindGroup1: GPUBindGroup
-	readbackBuffer: GPUBuffer
+	noiseReadbackBuffer: GPUBuffer
+	nodesReadbackBuffer: GPUBuffer
 	isReading: boolean
 
 	// output
 	result: Uint32Array;
+	nodesResult: Uint32Array;
 
 	constructor() {
 		const size = Math.pow(gridSize, 3) * 4;
@@ -28,19 +32,37 @@ export class Noise {
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 
-		this.readbackBuffer = device.createBuffer({
+		this.nodeCounterBuffer = device.createBuffer({
+			label: "Pointer",
+			size: 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+		});
+
+		this.nodesBuffer = device.createBuffer({
+			label: "Octree Nodes",
+			size: worstCaseMaxNodes * 9 * 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+		})
+
+		this.noiseReadbackBuffer = device.createBuffer({
 			size,
 			usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
 		});
 
+		this.nodesReadbackBuffer = device.createBuffer({
+			size: worstCaseMaxNodes * 9 * 4,
+			usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+		});
+
 		device.queue.writeBuffer(this.uniformBuffer, 0, new Uint32Array([gridSize]));
+		device.queue.writeBuffer(this.nodeCounterBuffer, 0, new Uint32Array([0]));
 
 		this.pipeline = device.createComputePipeline({
 			label: "Noise",
 			layout: "auto",
 			compute: {
 				module: device.createShaderModule({
-					code: shader,
+					code: shader
 				}),
 				entryPoint: "main",
 			},
@@ -52,6 +74,8 @@ export class Noise {
 			entries: [
 				{binding: 0, resource: this.uniformBuffer},
 				{binding: 1, resource: this.noiseBuffer},
+				{binding: 2, resource: this.nodeCounterBuffer},
+				{binding: 3, resource: this.nodesBuffer},
 			]
 		});
 
@@ -88,7 +112,12 @@ export class Noise {
 		computePass.end();
 
 		const size = Math.pow(gridSize, 3) * 4;
-		commandEncoder.copyBufferToBuffer(this.noiseBuffer, 0, this.readbackBuffer, 0, size);
+
+
+		// read back
+		commandEncoder.copyBufferToBuffer(this.noiseBuffer, 0, this.noiseReadbackBuffer, 0, size);
+		// TODO this could be optimized by reading the nodes_counter and only copying whats actual needed
+		commandEncoder.copyBufferToBuffer(this.nodesBuffer, 0, this.nodesReadbackBuffer, 0, worstCaseMaxNodes * 9 * 4);
 
 	}
 
@@ -103,10 +132,35 @@ export class Noise {
 		}
 
 		this.isReading = true;
-		this.readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-			const mappedData = new Uint32Array(this.readbackBuffer.getMappedRange());
+		this.noiseReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+			const mappedData = new Uint32Array(this.noiseReadbackBuffer.getMappedRange());
 			this.result = new Uint32Array(mappedData);
-			this.readbackBuffer.unmap();
+
+			let ones = 0;
+			for (let i = 0; i < this.result.length; i++) {
+				if (this.result[i] == 1) {
+					ones++;
+				}
+			}
+
+			console.log('blocks in noise:', ones)
+
+			this.noiseReadbackBuffer.unmap();
+		});
+
+		this.nodesReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+			const mappedData = new Uint32Array(this.nodesReadbackBuffer.getMappedRange());
+			this.nodesResult = new Uint32Array(mappedData);
+
+			let leafs = 0;
+			for (let offset = 0; offset < this.nodesResult.length; offset += 9) {
+				if (this.nodesResult[offset] == 1) {
+					leafs++;
+				}
+			}
+			console.log('leafs in node:', leafs);
+			console.log(this.nodesResult);
+			this.nodesReadbackBuffer.unmap();
 		});
 	}
 }

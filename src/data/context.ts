@@ -5,7 +5,9 @@ export class ContextUniform {
 	uniformArray: Float32Array = new Float32Array(
 		8   + // stuff
 		4*4 + // view
-		4*4   // perspective
+		4*4 + // inverse view
+		4*4 + // perspective
+		4*4   // inverse perspective
 	);
 	uniformBuffer: GPUBuffer;
 	canvas = document.getElementsByTagName('canvas')[0];
@@ -27,19 +29,21 @@ export class ContextUniform {
 		this.uniformArray[6] = time.now;
 		this.uniformArray[7] = time.delta;
 
-		const target = [gridSize, gridSize, gridSize];
+		const target = [gridSize/2, gridSize/2, gridSize/2];
 		const eye = [gridSize, gridSize, -gridSize * 2];
 		vec3.rotateY(eye, target, time.now, eye);
 		const up = [0, 1, 0];
 		const view = mat4.lookAt(eye, target, up);
 		this.uniformArray.set(view, 8);
+		this.uniformArray.set(mat4.inverse(view), 8 + 16);
 
 		const fov = 60 * Math.PI / 180;
 		const aspect = this.canvas.width / this.canvas.height;
 		const near = 0.1
 		const far = 1000
 		const perspective = mat4.perspective(fov, aspect, near, far);
-		this.uniformArray.set(perspective, 8 + 16);
+		this.uniformArray.set(perspective, 8 + 32);
+		this.uniformArray.set(mat4.inverse(perspective), 8 + 48);
 
 
 

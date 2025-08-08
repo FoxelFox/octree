@@ -5,5 +5,7 @@ struct Context {
   time: f32,
   delta: f32,
   view: mat4x4<f32>,
+  inverse_view: mat4x4<f32>,
   perspective: mat4x4<f32>,
+  inverse_perspective: mat4x4<f32>,
 }
