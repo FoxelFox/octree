@@ -30,22 +30,22 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   mouse.x *= ar;
 
   var d = distance(p, mouse);
+  var color: vec4<f32>;
   if (d < 0.05) {
-    d = 1.0;
+    color = vec4(1.0,0.7,0.2, 1.0);
   } else {
-    d = 0.0;
+    color = vec4(0,0,0,0);
   }
 
-  var color = vec4(1.0,0.7,0.2, d);
 
   let uv = (pos.xy / context.resolution);
 
   var last = textureSample(prevFrameTexture, smpler, uv);
-  last.a *= 0.9;
+  last = max(vec4(0.0), last - 0.002);
 
   var output: FragmentOutput;
-  output.colorForTexture = mix(last, color, 0.5);
-  output.colorForCanvas = mix(last, color, 0.5);
+  output.colorForTexture = mix(last, color, 0.05);
+  output.colorForCanvas = mix(last, color, 0.05);
   return output;
 }
 

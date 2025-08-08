@@ -1,5 +1,5 @@
-import {canvas, device, mouse, time} from "../index";
-import {mat4} from "wgpu-matrix";
+import {canvas, device, gridSize, mouse, time} from "../index";
+import {mat4, vec3} from "wgpu-matrix";
 
 export class ContextUniform {
 	uniformArray: Float32Array = new Float32Array(
@@ -27,8 +27,9 @@ export class ContextUniform {
 		this.uniformArray[6] = time.now;
 		this.uniformArray[7] = time.delta;
 
-		const eye = [3, 5, 10];
-		const target = [2, 2, 2];
+		const target = [gridSize, gridSize, gridSize];
+		const eye = [gridSize, gridSize, -gridSize * 2];
+		vec3.rotateY(eye, target, time.now, eye);
 		const up = [0, 1, 0];
 		const view = mat4.lookAt(eye, target, up);
 		this.uniformArray.set(view, 8);
@@ -40,7 +41,7 @@ export class ContextUniform {
 		const perspective = mat4.perspective(fov, aspect, near, far);
 		this.uniformArray.set(perspective, 8 + 16);
 
-		console.log(perspective)
+
 
 		device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformArray);
 	}

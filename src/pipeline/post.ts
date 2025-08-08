@@ -27,7 +27,19 @@ export class Post {
 				}),
 				entryPoint: 'main_fs',
 				targets: [
-					{format: 'bgra8unorm'},
+					{
+						format: 'bgra8unorm',
+						blend: {
+							color: {
+								srcFactor: 'one',
+								dstFactor: 'one-minus-src-alpha'
+							},
+							alpha: {
+								srcFactor: 'one',
+								dstFactor: 'one-minus-src-alpha'
+							}
+						}
+					},
 					{format: 'bgra8unorm'}
 				]
 			},
@@ -56,14 +68,12 @@ export class Post {
 		const passEncoder = commandEncoder.beginRenderPass({
 			colorAttachments: [{
 				view: context.getCurrentTexture().createView(),
-				loadOp: 'clear',
+				loadOp: 'load',
 				storeOp: 'store',
-				clearValue: {r: 0, g: 0, b: 0, a: 1}
 			}, {
 				view: this.frameBuffers[(this.frame + 1) % 2].createView(),
-				loadOp: 'clear',
+				loadOp: 'load',
 				storeOp: 'store',
-				clearValue: {r: 0, g: 0, b: 0, a: 1}
 			}]
 		});
 		passEncoder.setPipeline(this.pipeline);

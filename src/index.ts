@@ -7,6 +7,7 @@ import {Block} from "./pipeline/block";
 export const gpu = new GPUContext();
 await gpu.init();
 
+export const gridSize = 4;
 export const device = gpu.device;
 export const context = gpu.context;
 export const canvas = gpu.canvas;
@@ -23,7 +24,7 @@ const block = new Block();
 
 block.noise  = noise;
 
-const pipelines = [noise, block];
+const pipelines = [noise, block, post];
 
 loop();
 

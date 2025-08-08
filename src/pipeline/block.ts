@@ -1,5 +1,5 @@
 import {Noise} from "./noise";
-import {context, contextUniform, device} from "../index";
+import {context, contextUniform, device, gridSize} from "../index";
 import shader from "./block.wgsl" with {type: "text"};
 
 export class Block {
@@ -13,6 +13,8 @@ export class Block {
 	indexBuffer: GPUBuffer
 	vertexBuffer: GPUBuffer
 
+	initialized: boolean;
+
 
 	constructor() {
 
@@ -21,21 +23,50 @@ export class Block {
 	update(commandEncoder: GPUCommandEncoder) {
 
 		if (!this.noise.result) {
-
 			console.log('no voxel currently')
 			return;
 		}
 
-		if (this.indexBuffer) {
-			this.indexBuffer.destroy();
+		if (!this.initialized) {
+			this.init();
 		}
 
+		const pass = commandEncoder.beginRenderPass({
+			label: 'Block',
+			colorAttachments: [{
+				view: context.getCurrentTexture().createView(),
+				loadOp: 'clear',
+				storeOp: 'store',
+				clearValue: {r: 0, g: 0, b: 0, a: 0}
+			}]
+		});
+
+		pass.setPipeline(this.pipeline);
+		pass.setBindGroup(0, this.bindGroup);
+		pass.setBindGroup(1, this.uniformBindGroup);
+		pass.setVertexBuffer(0, this.vertexBuffer);
+		pass.draw(this.vertexBuffer.size / 16, this.indexBuffer.size / 4);
+		pass.end();
+
+	}
+
+	afterUpdate() {
+
+	}
+
+	init() {
 		const positions = []
 		for (let i = 0; i < this.noise.result.length; i++) {
 			if(this.noise.result[i] === 1) {
 				const [x,y,z] = this.to3D(i);
 				positions.push(...[x,y,z,0]);
 			}
+		}
+
+		console.log(positions.length * 12, 'Polygons')
+
+		if (this.indexBuffer) {
+			this.indexBuffer.destroy();
 		}
 
 		this.indexBuffer = device.createBuffer({
@@ -48,7 +79,7 @@ export class Block {
 		this.vertexBuffer = device.createBuffer({
 			label: 'Block Vertices',
 			size: vertices.byteLength,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
 		})
 
 		device.queue.writeBuffer(this.indexBuffer, 0, new Float32Array(positions));
@@ -63,7 +94,6 @@ export class Block {
 					code: shader,
 				}),
 				targets: [
-					{format: 'bgra8unorm'},
 					{format: 'bgra8unorm'}
 				]
 			},
@@ -101,33 +131,13 @@ export class Block {
 			entries: [
 				{binding: 0, resource: contextUniform.uniformBuffer}
 			]
-		})
-
-		const pass = commandEncoder.beginRenderPass({
-			label: 'Block',
-			colorAttachments: [{
-				view: context.getCurrentTexture().createView(),
-				loadOp: 'clear',
-				storeOp: 'store',
-				clearValue: {r: 0, g: 0, b: 0, a: 1}
-			}]
 		});
 
-		pass.setPipeline(this.pipeline);
-		pass.setBindGroup(0, this.bindGroup);
-		pass.setBindGroup(1, this.uniformBindGroup);
-		pass.setVertexBuffer(0, this.vertexBuffer);
-		pass.draw(this.vertexBuffer.size / 16, this.indexBuffer.size / 4);
-		pass.end();
-
-	}
-
-	afterUpdate() {
-
+		this.initialized = true;
 	}
 
 	to3D(index: number) {
-		const size = this.noise.gridSize;
+		const size = gridSize;
 		const z = Math.floor(index / (size * size));
 		const y = Math.floor((index % (size * size)) / size);
 		const x = index % size;
@@ -136,47 +146,47 @@ export class Block {
 
 	get vertices(): Float32Array {
 		return new Float32Array([
-			1, -1, 1, 1,
-			-1, -1, 1, 1,
-			-1, -1, -1, 1,
-			1, -1, -1, 1,
-			1, -1, 1, 1,
-			-1, -1, -1, 1,
+			0.5, -0.5, 0.5, 0.5,
+			-0.5, -0.5, 0.5, 0.5,
+			-0.5, -0.5, -0.5, 0.5,
+			0.5, -0.5, -0.5, 0.5,
+			0.5, -0.5, 0.5, 0.5,
+			-0.5, -0.5, -0.5, 0.5,
 
-			1, 1, 1, 1,
-			1, -1, 1, 1,
-			1, -1, -1, 1,
-			1, 1, -1, 1,
-			1, 1, 1, 1,
-			1, -1, -1, 1,
+			0.5, 0.5, 0.5, 0.5,
+			0.5, -0.5, 0.5, 0.5,
+			0.5, -0.5, -0.5, 0.5,
+			0.5, 0.5, -0.5, 0.5,
+			0.5, 0.5, 0.5, 0.5,
+			0.5, -0.5, -0.5, 0.5,
 
-			-1, 1, 1, 1,
-			1, 1, 1, 1,
-			1, 1, -1, 1,
-			-1, 1, -1, 1,
-			-1, 1, 1, 1,
-			1, 1, -1, 1,
+			-0.5, 0.5, 0.5, 0.5,
+			0.5, 0.5, 0.5, 0.5,
+			0.5, 0.5, -0.5, 0.5,
+			-0.5, 0.5, -0.5, 0.5,
+			-0.5, 0.5, 0.5, 0.5,
+			0.5, 0.5, -0.5, 0.5,
 
-			-1, -1, 1, 1,
-			-1, 1, 1, 1,
-			-1, 1, -1, 1,
-			-1, -1, -1, 1,
-			-1, -1, 1, 1,
-			-1, 1, -1, 1,
+			-0.5, -0.5, 0.5, 0.5,
+			-0.5, 0.5, 0.5, 0.5,
+			-0.5, 0.5, -0.5, 0.5,
+			-0.5, -0.5, -0.5, 0.5,
+			-0.5, -0.5, 0.5, 0.5,
+			-0.5, 0.5, -0.5, 0.5,
 
-			1, 1, 1, 1,
-			-1, 1, 1, 1,
-			-1, -1, 1, 1,
-			-1, -1, 1, 1,
-			1, -1, 1, 1,
-			1, 1, 1, 1,
+			0.5, 0.5, 0.5, 0.5,
+			-0.5, 0.5, 0.5, 0.5,
+			-0.5, -0.5, 0.5, 0.5,
+			-0.5, -0.5, 0.5, 0.5,
+			0.5, -0.5, 0.5, 0.5,
+			0.5, 0.5, 0.5, 0.5,
 
-			1, -1, -1, 1,
-			-1, -1, -1, 1,
-			-1, 1, -1, 1,
-			1, 1, -1, 1,
-			1, -1, -1, 1,
-			-1, 1, -1, 1
+			0.5, -0.5, -0.5, 0.5,
+			-0.5, -0.5, -0.5, 0.5,
+			-0.5, 0.5, -0.5, 0.5,
+			0.5, 0.5, -0.5, 0.5,
+			0.5, -0.5, -0.5, 0.5,
+			-0.5, 0.5, -0.5, 0.5
 		]);
 	}
 }

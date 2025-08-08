@@ -1,21 +1,21 @@
-import {contextUniform, device} from "..";
+import {contextUniform, device, gridSize} from "..";
 import shader from "./noise.wgsl" with {type: "text"};
 
 export class Noise {
 
 	noiseBuffer: GPUBuffer
-	maxDepth: number = 2
 	uniformBuffer: GPUBuffer
 	pipeline: GPUComputePipeline
 	bindGroup0: GPUBindGroup
 	bindGroup1: GPUBindGroup
 	readbackBuffer: GPUBuffer
+	isReading: boolean
 
 	// output
 	result: Uint32Array;
 
 	constructor() {
-		const size = Math.pow(this.gridSize, 3) * 4;
+		const size = Math.pow(gridSize, 3) * 4;
 		this.noiseBuffer = device.createBuffer({
 			label: "Noise",
 			size,
@@ -33,7 +33,7 @@ export class Noise {
 			usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
 		});
 
-		device.queue.writeBuffer(this.uniformBuffer, 0, new Uint32Array([this.gridSize]));
+		device.queue.writeBuffer(this.uniformBuffer, 0, new Uint32Array([gridSize]));
 
 		this.pipeline = device.createComputePipeline({
 			label: "Noise",
@@ -71,19 +71,23 @@ export class Noise {
 			return;
 		}
 
+		if (this.isReading) {
+			return;
+		}
+
+		console.log('generate noise')
 		const computePass = commandEncoder.beginComputePass();
 		computePass.setPipeline(this.pipeline);
 		computePass.setBindGroup(0, this.bindGroup0);
 		computePass.setBindGroup(1, this.bindGroup1);
-		console.log(this.gridSize)
 		computePass.dispatchWorkgroups(
-			Math.ceil(this.gridSize / 4),
-			Math.ceil(this.gridSize / 4),
-			Math.ceil(this.gridSize / 4)
+			Math.ceil(gridSize / 4),
+			Math.ceil(gridSize / 4),
+			Math.ceil(gridSize / 4)
 		);
 		computePass.end();
 
-		const size = Math.pow(this.gridSize, 3) * 4;
+		const size = Math.pow(gridSize, 3) * 4;
 		commandEncoder.copyBufferToBuffer(this.noiseBuffer, 0, this.readbackBuffer, 0, size);
 
 	}
@@ -94,14 +98,15 @@ export class Noise {
 			return;
 		}
 
+		if (this.isReading) {
+			return;
+		}
+
+		this.isReading = true;
 		this.readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-			this.result = new Uint32Array(this.readbackBuffer.getMappedRange());
-			console.log("Noise:", this.result);
+			const mappedData = new Uint32Array(this.readbackBuffer.getMappedRange());
+			this.result = new Uint32Array(mappedData);
 			this.readbackBuffer.unmap();
 		});
-	}
-
-	get gridSize(): number {
-		return Math.pow(2, this.maxDepth);
 	}
 }
