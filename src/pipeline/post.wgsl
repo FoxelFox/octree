@@ -30,9 +30,8 @@ fn traverse_octree(world_pos: vec3<f32>, grid_size: u32) -> u32 {
     pos = min(pos, vec3<u32>(grid_size - 1u));
     
     var depth = 0u;
-    let max_depth = 2u; // Match the max_depth from noise generation
     
-    while (depth < max_depth) {
+    while (depth < context.max_depth) {
         let level_size = grid_size >> depth;
         if (level_size <= 1u) {
             break;
@@ -65,7 +64,7 @@ fn traverse_octree(world_pos: vec3<f32>, grid_size: u32) -> u32 {
 fn raycast_octree(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> vec3<f32> {
     let max_steps = 256u;
     let grid_size_f = f32(grid_size);
-    let step_size = 0.05; // Smaller step size for better accuracy
+    let step_size = 0.5; // Smaller step size for better accuracy
     
     var t = 0.0;
     let max_distance = 50.0; // Reasonable max ray distance
@@ -101,8 +100,6 @@ struct FragmentOutput {
 fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   let uv = pos.xy / context.resolution;
   let ndc = vec4<f32>((uv - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
-
-  let grid_size = 4u; // Should match gridSize from TypeScript
   
   // Transform from NDC to world space to get ray
   let view_pos = context.inverse_perspective * ndc;
@@ -115,7 +112,7 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   let ray_dir = normalize(world_pos.xyz - camera_pos);
   
   // Raycast through octree
-  let hit_pos = raycast_octree(camera_pos, ray_dir, grid_size);
+  let hit_pos = raycast_octree(camera_pos, ray_dir, context.grid_size);
   
   var color: vec4<f32>;
   if (hit_pos.x >= 0.0) {

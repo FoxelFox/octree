@@ -9,21 +9,20 @@ struct Octree {
 const INVALID_INDEX: u32 = 0xFFFFFFFFu; // Changed from 0u to avoid collision with root
 
 // input
-@group(0) @binding(0) var<uniform> grid_size: u32;
 @group(1) @binding(0) var<uniform> context: Context;
 
 // output
-@group(0) @binding(1) var<storage, read_write> noise: array<u32>;
-@group(0) @binding(2) var<storage, read_write> node_counter: atomic<u32>;
-@group(0) @binding(3) var<storage, read_write> nodes: array<Octree>;
+@group(0) @binding(0) var<storage, read_write> noise: array<u32>;
+@group(0) @binding(1) var<storage, read_write> node_counter: atomic<u32>;
+@group(0) @binding(2) var<storage, read_write> nodes: array<Octree>;
 
 fn to1D(id: vec3<u32>) -> u32 {
-    return id.z * grid_size * grid_size + id.y * grid_size + id.x;
+    return id.z * context.grid_size *  context.grid_size + id.y *  context.grid_size + id.x;
 }
 
 fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
     // Calculate the size of the current octree level
-    let level_size = grid_size >> depth;
+    let level_size =  context.grid_size >> depth;
 
     // Calculate which child this voxel belongs to at the current level
     let half_size = level_size >> 1u;
@@ -120,11 +119,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Octree Generation
     if (zero_or_one == 1u) {
         var current_index = 0u; // Start from root
-        let max_depth = 2u; // Limit depth for safety
 
-        for (var depth = 0u; depth < max_depth; depth++) {
+
+        for (var depth = 0u; depth < context.max_depth; depth++) {
         	// only store data in leafs othes have to be zeros
-        	var data = select(0u, 1u, (depth + 1u) == max_depth);
+        	var data = select(0u, 1u, (depth + 1u) == context.max_depth);
             current_index = insert(current_index, id, depth, data);
         }
     }

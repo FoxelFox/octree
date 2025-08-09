@@ -7,7 +7,7 @@ import {Block} from "./pipeline/block";
 export const gpu = new GPUContext();
 await gpu.init();
 
-export const maxDepth = 2;
+export const maxDepth = 4;
 export const gridSize = Math.pow(2, maxDepth);
 export const worstCaseMaxNodes = Math.floor((Math.pow(8, maxDepth + 1) -1)/ 7);
 export const device = gpu.device;

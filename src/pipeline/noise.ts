@@ -6,7 +6,6 @@ export class Noise {
 	noiseBuffer: GPUBuffer
 	nodeCounterBuffer: GPUBuffer
 	nodesBuffer: GPUBuffer
-	uniformBuffer: GPUBuffer
 	pipeline: GPUComputePipeline
 	bindGroup0: GPUBindGroup
 	bindGroup1: GPUBindGroup
@@ -24,12 +23,6 @@ export class Noise {
 			label: "Noise",
 			size,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-		});
-
-		this.uniformBuffer = device.createBuffer({
-			label: "Noise Uniform",
-			size: 4,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
 
 		this.nodeCounterBuffer = device.createBuffer({
@@ -54,7 +47,6 @@ export class Noise {
 			usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
 		});
 
-		device.queue.writeBuffer(this.uniformBuffer, 0, new Uint32Array([gridSize]));
 		device.queue.writeBuffer(this.nodeCounterBuffer, 0, new Uint32Array([0]));
 
 		this.pipeline = device.createComputePipeline({
@@ -72,10 +64,9 @@ export class Noise {
 			label: "Noise",
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
-				{binding: 0, resource: this.uniformBuffer},
-				{binding: 1, resource: this.noiseBuffer},
-				{binding: 2, resource: this.nodeCounterBuffer},
-				{binding: 3, resource: this.nodesBuffer},
+				{binding: 0, resource: this.noiseBuffer},
+				{binding: 1, resource: this.nodeCounterBuffer},
+				{binding: 2, resource: this.nodesBuffer},
 			]
 		});
 
