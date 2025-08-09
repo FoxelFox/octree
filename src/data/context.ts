@@ -1,4 +1,4 @@
-import {canvas, device, gridSize, maxDepth, mouse, time} from "../index";
+import {canvas, device, gridSize, maxDepth, mouse, camera, time} from "../index";
 import {mat4, vec3} from "wgpu-matrix";
 
 export class ContextUniform {
@@ -49,9 +49,12 @@ export class ContextUniform {
 		const jitterX = (this.halton(this.frameCount + 1, 2) - 0.5) / canvas.width;
 		const jitterY = (this.halton(this.frameCount + 1, 3) - 0.5) / canvas.height;
 
-		const target = [gridSize/2, gridSize/2, gridSize/2];
-		const eye = [gridSize, gridSize * 1.15, -gridSize / 2];
-		vec3.rotateY(eye, target, time.now / 8, eye);
+		const eye = camera.position;
+		const target = [
+			eye[0] + Math.sin(camera.yaw) * Math.cos(camera.pitch),
+			eye[1] + Math.sin(camera.pitch),
+			eye[2] + Math.cos(camera.yaw) * Math.cos(camera.pitch)
+		];
 		const up = [0, 1, 0];
 		const view = mat4.lookAt(eye, target, up);
 		this.uniformArray.set(view, o);
@@ -105,8 +108,8 @@ export class ContextUniform {
 		// Add padding to reach required buffer size
 		o += 2;
 
-		// Calculate and store current view-projection for next frame
-		const currentViewProjection = mat4.multiply(jitteredPerspective, view);
+		// Calculate and store current view-projection for next frame (without jitter for motion vectors)
+		const currentViewProjection = mat4.multiply(perspective, view);
 		this.prevViewProjection.set(currentViewProjection);
 		
 		// Store current camera position for next frame

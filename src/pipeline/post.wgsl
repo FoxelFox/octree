@@ -355,20 +355,27 @@ struct FragmentOutput {
 
 // Calculate motion vectors for TAA
 fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>) -> vec2<f32> {
-    // Transform world position to current frame's clip space (for verification)
-    let current_view_proj = context.perspective * context.view;
+    // For motion vectors, we need to use non-jittered projection to get stable reprojection
+    // The jittered perspective is used for rendering, but motion vectors need to be consistent
+    
+    // Create non-jittered projection by removing jitter from the current perspective matrix
+    var unjittered_perspective = context.perspective;
+    unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x
+    unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y
+    
+    // Transform world position to current frame's clip space (without jitter)
+    let current_view_proj = unjittered_perspective * context.view;
     let current_clip = current_view_proj * vec4<f32>(world_pos, 1.0);
     let current_ndc = current_clip.xyz / current_clip.w;
     let current_screen_uv = current_ndc.xy * 0.5 + 0.5;
-    // Note: Y is already flipped correctly by the projection matrix
     
-    // Transform world position to previous frame's clip space
+    // Transform world position to previous frame's clip space (already non-jittered)
     let prev_clip = context.prev_view_projection * vec4<f32>(world_pos, 1.0);
     let prev_ndc = prev_clip.xyz / prev_clip.w;
     let prev_screen_uv = prev_ndc.xy * 0.5 + 0.5;
     
-    // Motion vector: where to find this pixel in the previous frame
-    // This is the offset from current position to previous position
+    // Motion vector: how far this pixel moved from previous frame to current frame
+    // For TAA, we want to know where to sample in the previous frame texture
     return prev_screen_uv - current_screen_uv;
 }
 
@@ -382,14 +389,14 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     let motion_vector = calculate_motion_vector(world_hit_pos, current_uv) * has_hit;
     let history_uv = current_uv + motion_vector;
     
-    // Much stricter motion vector validation to reduce smearing
+    // Motion vector validation - be more permissive for camera movement
     let mv_length = length(motion_vector);
-    let mv_reasonable = select(0.0, 1.0, mv_length < 0.05); // Much stricter threshold
+    let mv_reasonable = select(0.0, 1.0, mv_length < 0.2); // More permissive for forward/backward movement
     
-    // Strict bounds checking with margin
+    // Bounds checking with reasonable margin for forward/backward movement  
     let in_bounds = select(0.0, 1.0, 
-        history_uv.x >= 0.02 && history_uv.x <= 0.98 && 
-        history_uv.y >= 0.02 && history_uv.y <= 0.98);
+        history_uv.x >= 0.0 && history_uv.x <= 1.0 && 
+        history_uv.y >= 0.0 && history_uv.y <= 1.0);
     
     let history_valid = has_hit * in_bounds * mv_reasonable;
     

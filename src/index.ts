@@ -14,6 +14,7 @@ export const device = gpu.device;
 export const context = gpu.context;
 export const canvas = gpu.canvas;
 export const mouse = gpu.mouse;
+export const camera = gpu.camera;
 export const time = gpu.time;
 export const contextUniform = new ContextUniform();
 
