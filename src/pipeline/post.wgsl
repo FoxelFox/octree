@@ -354,135 +354,141 @@ struct FragmentOutput {
 };
 
 // Calculate motion vectors for TAA
-fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>) -> vec2<f32> {
-    // For motion vectors, we need to use non-jittered projection to get stable reprojection
-    // The jittered perspective is used for rendering, but motion vectors need to be consistent
-    
-    // Create non-jittered projection by removing jitter from the current perspective matrix
-    var unjittered_perspective = context.perspective;
-    unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x
-    unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y
-    
-    // Transform world position to current frame's clip space (without jitter)
-    let current_view_proj = unjittered_perspective * context.view;
-    let current_clip = current_view_proj * vec4<f32>(world_pos, 1.0);
-    let current_ndc = current_clip.xyz / current_clip.w;
-    let current_screen_uv = current_ndc.xy * 0.5 + 0.5;
-    
-    // Transform world position to previous frame's clip space (already non-jittered)
-    let prev_clip = context.prev_view_projection * vec4<f32>(world_pos, 1.0);
-    let prev_ndc = prev_clip.xyz / prev_clip.w;
-    let prev_screen_uv = prev_ndc.xy * 0.5 + 0.5;
-    
-    // Motion vector: how far this pixel moved from previous frame to current frame
-    // For TAA, we want to know where to sample in the previous frame texture
-    return prev_screen_uv - current_screen_uv;
+fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir: vec3<f32>, camera_pos: vec3<f32>) -> vec2<f32> {
+    // Check if we have a valid voxel hit
+    if (world_pos.x >= -0.001) {
+        // For voxel hits, use world position-based motion vectors
+        // For motion vectors, we need to use non-jittered projection to get stable reprojection
+        // The jittered perspective is used for rendering, but motion vectors need to be consistent
+        
+        // Create non-jittered projection by removing jitter from the current perspective matrix
+        var unjittered_perspective = context.perspective;
+        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x
+        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y
+        
+        // Transform world position to current frame's clip space (without jitter)
+        let current_view_proj = unjittered_perspective * context.view;
+        let current_clip = current_view_proj * vec4<f32>(world_pos, 1.0);
+        let current_ndc = current_clip.xyz / current_clip.w;
+        let current_screen_uv = vec2<f32>(current_ndc.x * 0.5 + 0.5, -current_ndc.y * 0.5 + 0.5);
+        
+        // Transform world position to previous frame's clip space (already non-jittered)
+        let prev_clip = context.prev_view_projection * vec4<f32>(world_pos, 1.0);
+        let prev_ndc = prev_clip.xyz / prev_clip.w;
+        let prev_screen_uv = vec2<f32>(prev_ndc.x * 0.5 + 0.5, -prev_ndc.y * 0.5 + 0.5);
+        
+        // Motion vector: how far this pixel moved from previous frame to current frame
+        return prev_screen_uv - current_screen_uv;
+    } else {
+        // For background pixels, calculate motion vector and filter out small movements (translation)
+        let far_distance = 10000.0;
+        let background_world_pos = ray_dir * far_distance;
+        
+        // Create non-jittered projection by removing jitter from the current perspective matrix
+        var unjittered_perspective = context.perspective;
+        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0;
+        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0;
+        
+        // Transform background position to current frame's clip space (without jitter)
+        let current_view_proj = unjittered_perspective * context.view;
+        let current_clip = current_view_proj * vec4<f32>(background_world_pos, 1.0);
+        let current_ndc = current_clip.xyz / current_clip.w;
+        let current_screen_uv = vec2<f32>(current_ndc.x * 0.5 + 0.5, -current_ndc.y * 0.5 + 0.5);
+        
+        // Transform background position to previous frame's clip space
+        let prev_clip = context.prev_view_projection * vec4<f32>(background_world_pos, 1.0);
+        let prev_ndc = prev_clip.xyz / prev_clip.w;
+        let prev_screen_uv = vec2<f32>(prev_ndc.x * 0.5 + 0.5, -prev_ndc.y * 0.5 + 0.5);
+        
+        let motion_vec = prev_screen_uv - current_screen_uv;
+        let motion_magnitude = length(motion_vec);
+        
+        // If motion is very small (pure translation), zero it out to avoid artifacts
+        // If motion is significant (rotation), keep it for proper TAA
+        if (motion_magnitude < 0.001) {
+            return vec2<f32>(0.0, 0.0);
+        } else {
+            return motion_vec;
+        }
+    }
 }
 
-// TAA history sampling with validation - optimized to use stored world position
-fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit_pos: vec3<f32>) -> vec4<f32> {
-    // Use the world position from the main raycast (passed as parameter)
-    // No need to raycast again!
+// A more robust and stable TAA implementation.
+// A more robust TAA that handles disocclusion edges gracefully.
+fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit_pos: vec3<f32>, camera_pos: vec3<f32>, ray_dir: vec3<f32>) -> vec4<f32> {
+    let has_current_hit = world_hit_pos.x >= -0.001;
     
-    // Calculate motion vector if we have a valid hit
-    let has_hit = select(0.0, 1.0, world_hit_pos.x >= -0.001);
-    let motion_vector = calculate_motion_vector(world_hit_pos, current_uv) * has_hit;
+    // 1. Calculate motion vector to find the sample location in the previous frame.
+    let motion_vector = calculate_motion_vector(world_hit_pos, current_uv, ray_dir, camera_pos);
     let history_uv = current_uv + motion_vector;
-    
-    // Motion vector validation - be more permissive for camera movement
-    let mv_length = length(motion_vector);
-    let mv_reasonable = select(0.0, 1.0, mv_length < 0.2); // More permissive for forward/backward movement
-    
-    // Bounds checking with reasonable margin for forward/backward movement  
-    let in_bounds = select(0.0, 1.0, 
-        history_uv.x >= 0.0 && history_uv.x <= 1.0 && 
-        history_uv.y >= 0.0 && history_uv.y <= 1.0);
-    
-    let history_valid = has_hit * in_bounds * mv_reasonable;
-    
-    // Sample history with improved filtering
+
+    // FIX: Perform ALL texture samples/loads upfront, in uniform control flow.
+    let history_coord_i = vec2<i32>(history_uv * context.resolution);
+    let prev_frame_data = textureLoad(prevWorldPosTexture, history_coord_i, 0);
     let history_color = textureSample(prevFrameTexture, smpler, history_uv);
     
-    // Expand neighborhood sampling for better color variance analysis
-    let coord = vec2<i32>(current_uv * context.resolution);
-    let center = textureLoad(prevFrameTexture, coord, 0);
-    let tl = textureLoad(prevFrameTexture, coord + vec2<i32>(-1, -1), 0);
-    let tr = textureLoad(prevFrameTexture, coord + vec2<i32>(1, -1), 0);
-    let bl = textureLoad(prevFrameTexture, coord + vec2<i32>(-1, 1), 0);
-    let br = textureLoad(prevFrameTexture, coord + vec2<i32>(1, 1), 0);
-    let left = textureLoad(prevFrameTexture, coord + vec2<i32>(-1, 0), 0);
-    let right = textureLoad(prevFrameTexture, coord + vec2<i32>(1, 0), 0);
-    let top = textureLoad(prevFrameTexture, coord + vec2<i32>(0, -1), 0);
-    let bottom = textureLoad(prevFrameTexture, coord + vec2<i32>(0, 1), 0);
+    // Sample current pixel neighborhood for voxel edge detection
+    let pixel_coord = vec2<i32>(current_uv * context.resolution);
     
-    // Calculate neighborhood statistics with better coverage
-    let neighbor_min = min(min(min(min(min(min(min(min(tl, tr), bl), br), left), right), top), bottom), center);
-    let neighbor_max = max(max(max(max(max(max(max(max(tl, tr), bl), br), left), right), top), bottom), center);
-    let neighbor_avg = (tl + tr + bl + br + left + right + top + bottom + center) / 9.0;
+    // Sample neighborhood colors for clamping
+    var neighbor_min = vec4(1.0);
+    var neighbor_max = vec4(0.0);
+    var near_voxel_edge = false;
+    for (var y: i32 = -1; y <= 1; y++) {
+        for (var x: i32 = -1; x <= 1; x++) {
+            let neighbor_coord = pixel_coord + vec2(x, y);
+            let neighbor_world_data = textureLoad(prevWorldPosTexture, neighbor_coord, 0);
+            let sample_color = textureLoad(prevFrameTexture, history_coord_i + vec2(x, y), 0);
+            
+            // Check for voxel hits in neighborhood
+            if (neighbor_world_data.w > 0.0) {
+                near_voxel_edge = true;
+            }
+            
+            // Update color bounds
+            neighbor_min = min(neighbor_min, sample_color);
+            neighbor_max = max(neighbor_max, sample_color);
+        }
+    }
     
-    // Calculate color variance in neighborhood for stability assessment
-    let color_variance = (
-        length(tl - neighbor_avg) + length(tr - neighbor_avg) + 
-        length(bl - neighbor_avg) + length(br - neighbor_avg) +
-        length(left - neighbor_avg) + length(right - neighbor_avg) +
-        length(top - neighbor_avg) + length(bottom - neighbor_avg) +
-        length(center - neighbor_avg)
-    ) / 9.0;
-    
-    // Variance-based stability: high variance areas need more temporal stability
-    let stability_threshold = 0.12;
-    let is_stable_area = select(0.0, 1.0, color_variance < stability_threshold);
-    
-    // Use expanded neighborhood clamping for better temporal coherence
-    let clamp_margin = 0.015;
-    let expanded_neighbor_min = neighbor_min - vec4<f32>(clamp_margin);
-    let expanded_neighbor_max = neighbor_max + vec4<f32>(clamp_margin);
-    let clamped_history = clamp(history_color, expanded_neighbor_min, expanded_neighbor_max);
-    
-    // Enhanced luminance and color difference validation
-    let current_luma = dot(current_color.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let history_luma = dot(clamped_history.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let luma_diff = abs(current_luma - history_luma);
-    let color_diff = length(current_color.rgb - clamped_history.rgb);
-    
-    // Multi-factor temporal confidence metric with luminance-adaptive thresholds
-    let camera_speed = length(context.camera_velocity);
-    let motion_stability = select(0.3, 1.0, camera_speed < 2.0); // Reduce confidence during fast camera motion
-    
-    // Adaptive thresholds based on luminance - be more permissive in dark areas
-    let avg_luma = (current_luma + history_luma) * 0.5;
-    let dark_area_factor = select(1.0, 2.5, avg_luma < 0.15); // More permissive in dark areas
-    
-    let adaptive_luma_threshold = 0.12 * dark_area_factor;
-    let adaptive_color_threshold = 0.15 * dark_area_factor;
-    
-    let luma_confidence = select(0.0, 1.0, luma_diff < adaptive_luma_threshold);
-    let color_confidence = select(0.0, 1.0, color_diff < adaptive_color_threshold);
-    let temporal_confidence = history_valid * luma_confidence * color_confidence * is_stable_area * motion_stability;
-    
-    // Adaptive blending with luminance-aware anti-smearing bias
-    let base_conservative_blend = 0.06;
-    let base_moderate_blend = 0.22;        
-    let base_aggressive_blend = 0.75;
-    
-    // Be more conservative in dark areas to preserve indirect lighting accumulation
-    let dark_conservation_factor = select(1.0, 0.4, avg_luma < 0.2); // Much more conservative in dark areas
-    
-    let conservative_blend = base_conservative_blend * dark_conservation_factor;
-    let moderate_blend = base_moderate_blend * dark_conservation_factor;
-    let aggressive_blend = mix(base_aggressive_blend, base_moderate_blend, 1.0 - dark_conservation_factor);
-    
-    let blend_factor = select(
-        aggressive_blend,
-        select(moderate_blend, conservative_blend, temporal_confidence > 0.75),
-        temporal_confidence < 0.25
-    );
-    
-    // Final temporal blend with improved fallback strategy
-    let fallback_color = mix(center, current_color, 0.35);
-    let selected_history = select(fallback_color, clamped_history, history_valid > 0.5);
-    
-    return mix(selected_history, current_color, blend_factor);
+    // For background pixels, check if we're near voxel edges for anti-aliasing
+    if (!has_current_hit && !near_voxel_edge) {
+        // Background pixel not near voxel edges, skip TAA history entirely
+        return current_color;
+    }
+
+    // 2. Perform History Rejection Checks.
+    let is_in_bounds = history_uv.x >= 0.0 && history_uv.x <= 1.0 &&
+                       history_uv.y >= 0.0 && history_uv.y <= 1.0;
+
+    if (!is_in_bounds) {
+        return current_color;
+    }
+
+    let prev_world_pos = prev_frame_data.xyz;
+    let had_prev_hit = prev_frame_data.w > 0.0;
+
+    // We combine the hit checks. History is valid if the hit status hasn't changed
+    // OR if the world position is still coherent.
+    var is_history_valid = (has_current_hit == had_prev_hit);
+    if (is_history_valid && has_current_hit) {
+        let world_pos_diff = distance(world_hit_pos, prev_world_pos);
+        let depth = distance(world_hit_pos, camera_pos);
+        let rejection_threshold = max(0.5, depth * 0.01);
+        if (world_pos_diff > rejection_threshold) {
+            is_history_valid = false;
+        }
+    }
+
+    // 4. If history is invalid, we clamp the aliased current color into the historical neighborhood.
+    var blend_target = current_color;
+    if (!is_history_valid) {
+        blend_target = clamp(current_color, neighbor_min, neighbor_max);
+    }
+
+    // 5. Blend the history with our (potentially clamped) current color.
+    let blend_factor = 0.1;
+    return mix(history_color, blend_target, blend_factor);
 }
 
 @fragment
@@ -576,7 +582,7 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
 //  }
 
   // TAA Implementation - pass the world position from our raycast
-  let history_color = taa_sample_history(uv, color, hit.pos);
+  let history_color = taa_sample_history(uv, color, hit.pos, camera_pos, ray_dir);
   
   var output: FragmentOutput;
   output.colorForTexture = history_color;

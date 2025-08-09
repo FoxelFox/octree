@@ -32,9 +32,9 @@ export class GPUContext {
     this.mouse = {ax: this.canvas.width / 2, ay: this.canvas.height / 2, rx: 0, ry: 0, deltaX: 0, deltaY: 0, locked: false};
     this.keys = new Set();
     this.camera = {
-      position: [32, 32, -16],
-      yaw: 0,
-      pitch: 0,
+      position: [32, 400, -100],
+      yaw: 0.4,
+      pitch: -0.8,
       speed: 16
     };
     this.time = {now: 0, delta: 0};
@@ -126,7 +126,8 @@ export class GPUContext {
   updateCamera() {
     if (!this.mouse.locked) return;
 
-    const moveSpeed = this.camera.speed * this.time.delta;
+    const speedMultiplier = this.keys.has('shiftleft') || this.keys.has('shiftright') ? 3 : 1;
+    const moveSpeed = this.camera.speed * this.time.delta * speedMultiplier;
     
     const forward = [
       Math.sin(this.camera.yaw) * Math.cos(this.camera.pitch),
