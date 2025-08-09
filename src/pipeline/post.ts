@@ -9,14 +9,55 @@ export class Post {
 	noise: Noise;
 
 	frameBuffers: GPUTexture[] = [];
+	worldPosBuffers: GPUTexture[] = [];
 	frameBufferBindgroups: GPUBindGroup[] = [];
 	sampler: GPUSampler;
 
 	frame = 0;
 
 	constructor() {
+		// Create explicit bind group layouts
+		const uniformBindGroupLayout = device.createBindGroupLayout({
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					buffer: { type: 'uniform' }
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: { type: 'storage' }
+				}
+			]
+		});
+
+		const textureBindGroupLayout = device.createBindGroupLayout({
+			entries: [
+				{
+					binding: 0,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: { sampleType: 'float' }
+				},
+				{
+					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT,
+					sampler: {}
+				},
+				{
+					binding: 2,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: { sampleType: 'unfilterable-float' }
+				}
+			]
+		});
+
+		const pipelineLayout = device.createPipelineLayout({
+			bindGroupLayouts: [uniformBindGroupLayout, textureBindGroupLayout]
+		});
+
 		this.pipeline = device.createRenderPipeline({
-			layout: 'auto',
+			layout: pipelineLayout,
 			vertex: {
 				module: device.createShaderModule({
 					code: shader
@@ -42,7 +83,8 @@ export class Post {
 							}
 						}
 					},
-					{format: 'bgra8unorm'}
+					{format: 'bgra8unorm'},
+			{format: 'rgba32float'}
 				]
 			},
 			primitive: {
@@ -94,6 +136,10 @@ export class Post {
 				view: this.frameBuffers[(this.frame + 1) % 2].createView(),
 				loadOp: 'load',
 				storeOp: 'store',
+			}, {
+				view: this.worldPosBuffers[(this.frame + 1) % 2].createView(),
+				loadOp: 'load',
+				storeOp: 'store',
 			}]
 		});
 		passEncoder.setPipeline(this.pipeline);
@@ -113,8 +159,11 @@ export class Post {
 		if (this.frameBuffers.length) {
 			this.frameBuffers[0].destroy();
 			this.frameBuffers[1].destroy();
+			this.worldPosBuffers[0]?.destroy();
+			this.worldPosBuffers[1]?.destroy();
 
 			this.frameBuffers.length = 0;
+			this.worldPosBuffers.length = 0;
 			this.frameBufferBindgroups.length = 0;
 		}
 
@@ -122,6 +171,12 @@ export class Post {
 			this.frameBuffers.push(device.createTexture({
 				size: {width: canvas.width, height: canvas.height},
 				format: navigator.gpu.getPreferredCanvasFormat(),
+				usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
+			}));
+			
+			this.worldPosBuffers.push(device.createTexture({
+				size: {width: canvas.width, height: canvas.height},
+				format: 'rgba32float',
 				usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
 			}));
 		}
@@ -137,7 +192,8 @@ export class Post {
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{binding: 0, resource: this.frameBuffers[0].createView()},
-				{binding: 1, resource: this.sampler}
+				{binding: 1, resource: this.sampler},
+				{binding: 2, resource: this.worldPosBuffers[0].createView()}
 			]
 		}));
 
@@ -145,7 +201,8 @@ export class Post {
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{binding: 0, resource: this.frameBuffers[1].createView()},
-				{binding: 1, resource: this.sampler}
+				{binding: 1, resource: this.sampler},
+				{binding: 2, resource: this.worldPosBuffers[1].createView()}
 			]
 		}));
 	}

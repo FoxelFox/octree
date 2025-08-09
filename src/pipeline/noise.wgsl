@@ -87,7 +87,7 @@ fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
 }
 
 fn generate_noise(pos: vec3<u32>) -> u32 {
-	let random_value = noise3(vec3<f32>(pos) / (2.0 * (sin(context.time/10.0) + 1.5)) - vec3<f32>(context.time, context.time, context.time));
+	let random_value = noise3(vec3<f32>(pos) / (20.0 * (sin(context.time/10.0) + 1.5)) - vec3<f32>(context.time, context.time, context.time));
 	if (random_value > (sin(context.time / 10.0) * cos(context.time/10.0) * 0.5 + 0.5)) {
 		return 1u;
 	} else {

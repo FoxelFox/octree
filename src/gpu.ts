@@ -30,7 +30,12 @@ export class GPUContext {
     try {
       if (navigator.gpu) {
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        this.device = await adapter.requestDevice();
+        this.device = await adapter.requestDevice({
+			requiredLimits: {
+				maxBufferSize: adapter.limits.maxBufferSize,
+				maxStorageBufferBindingSize: 2147483644
+			}
+		});
       }
     } finally {
       if (!this.device) {

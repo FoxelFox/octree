@@ -150,7 +150,6 @@ export class Noise {
 				}
 			}
 			console.log('leafs in node:', leafs);
-			console.log(this.nodesResult);
 			this.nodesReadbackBuffer.unmap();
 		});
 	}

@@ -15,7 +15,7 @@ export class Block {
 
 	initialized: boolean;
 
-	disabled: boolean;
+	disabled: boolean = true;
 
 
 	constructor() {
