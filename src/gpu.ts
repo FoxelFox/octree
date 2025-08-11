@@ -23,6 +23,11 @@ export class GPUContext {
     now: number
     delta: number
   }
+  renderMode: {
+    current: number
+    modes: string[]
+    lastLKeyPressed: boolean
+  }
 
   constructor() {
     this.canvas = document.getElementsByTagName('canvas')[0];
@@ -38,6 +43,11 @@ export class GPUContext {
       speed: 16
     };
     this.time = {now: 0, delta: 0};
+    this.renderMode = {
+      current: 0,
+      modes: ['Normal', 'Heatmap'],
+      lastLKeyPressed: false
+    };
 
     window.addEventListener("resize", this.setCanvasSize);
     window.addEventListener("mousemove", this.handleMouseMove);
@@ -62,7 +72,8 @@ export class GPUContext {
               requiredFeatures: ['timestamp-query'],
               requiredLimits: {
                 maxBufferSize: adapter.limits.maxBufferSize,
-                maxStorageBufferBindingSize: 1073741824
+                maxStorageBufferBindingSize: 1073741824,
+                maxColorAttachmentBytesPerSample: 128
               }
             });
           } catch (deviceError) {
@@ -98,6 +109,7 @@ export class GPUContext {
     this.time.delta = now - this.time.now;
     this.time.now = now;
     this.updateCamera();
+    this.updateRenderMode();
   }
 
   setCanvasSize = () => {
@@ -174,5 +186,17 @@ export class GPUContext {
       this.camera.position[0] -= right[0] * moveSpeed;
       this.camera.position[2] -= right[2] * moveSpeed;
     }
+  }
+
+  updateRenderMode() {
+    const lKeyPressed = this.keys.has('keyl');
+    
+    // Toggle render mode when L key is pressed (edge detection)
+    if (lKeyPressed && !this.renderMode.lastLKeyPressed) {
+      this.renderMode.current = (this.renderMode.current + 1) % this.renderMode.modes.length;
+      console.log(`Render mode: ${this.renderMode.modes[this.renderMode.current]}`);
+    }
+    
+    this.renderMode.lastLKeyPressed = lKeyPressed;
   }
 }

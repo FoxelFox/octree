@@ -16,6 +16,7 @@ export const canvas = gpu.canvas;
 export const mouse = gpu.mouse;
 export const camera = gpu.camera;
 export const time = gpu.time;
+export const renderMode = gpu.renderMode;
 export const contextUniform = new ContextUniform();
 
 

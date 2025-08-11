@@ -14,4 +14,5 @@ struct Context {
   jitter_offset: vec2<f32>,
   camera_velocity: vec3<f32>,
   frame_count: u32,
+  render_mode: u32,
 }

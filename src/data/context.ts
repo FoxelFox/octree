@@ -1,4 +1,4 @@
-import {canvas, device, gridSize, maxDepth, mouse, camera, time} from "../index";
+import {canvas, device, gridSize, maxDepth, mouse, camera, time, renderMode} from "../index";
 import {mat4, vec3} from "wgpu-matrix";
 
 export class ContextUniform {
@@ -13,7 +13,8 @@ export class ContextUniform {
 		2   + // jitter offset
 		3   + // camera velocity
 		1   + // frame count
-		2     // padding to reach 400 bytes (100 floats * 4 bytes = 400)
+		1   + // render mode
+		5     // padding to reach 416 bytes (104 floats * 4 bytes = 416)
 
 	);
 	uniformBuffer: GPUBuffer;
@@ -86,6 +87,9 @@ export class ContextUniform {
 		this.uniformArray[o++] = jitterX;
 		this.uniformArray[o++] = jitterY;
 
+		o++; // padding
+		o++; // padding
+
 		// Calculate camera velocity for TAA
 		const currentCameraPosition = [eye[0], eye[1], eye[2]];
 		let cameraVelocity = [0, 0, 0];
@@ -100,13 +104,15 @@ export class ContextUniform {
 		this.uniformArray[o++] = cameraVelocity[1];
 		this.uniformArray[o++] = cameraVelocity[2];
 
+
 		// Store frame count
-		const integerView = new Uint32Array(this.uniformArray.buffer);
-		integerView[o] = this.frameCount;
-		o++;
+		integer[o++] = this.frameCount;
+		
+		// Store render mode
+		integer[o++] = renderMode.current;
 		
 		// Add padding to reach required buffer size
-		o += 2;
+		o += 4;
 
 		// Calculate and store current view-projection for next frame (without jitter for motion vectors)
 		const currentViewProjection = mat4.multiply(perspective, view);

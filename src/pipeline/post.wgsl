@@ -192,6 +192,7 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
 // Stack-based octree raycast. Returns world-space hit position or (-1,-1,-1)
 fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
 	var result: RayCast;
+	var step_count: u32 = 0u;
     // Root AABB in world coordinates: [0, grid_size]
     let gs_f = f32(grid_size);
     let root_min = vec3<f32>(0.0, 0.0, 0.0);
@@ -203,6 +204,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
     	// no hit
     	result.data = 0;
     	result.pos = vec3<f32>(-1.0);
+    	result.steps = 0u;
     	return result;
     }
 
@@ -235,6 +237,8 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
         let node_size_f = stack_size[sp];
         let node_tentry = stack_tentry[sp];
         let depth = stack_depth_int[sp];
+        
+        step_count = step_count + 1u;
 
         // determine leaf: either reached provided max depth or voxel-size <= 1.0 (world-space units)
         if ((depth >= context.max_depth) || (node_size_f <= 1.0)) {
@@ -245,6 +249,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
                 let t_hit = max(node_tentry, 0.0);
                 result.pos = ray_origin + ray_dir * t_hit;
                 result.data = d;
+                result.steps = step_count;
 
                 // --- 👇 NORMAL CALCULATION LOGIC ---
 				// Calculate the center of the leaf cube
@@ -344,6 +349,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
     // nothing hit
 	result.data = 0;
 	result.pos = vec3<f32>(-1.0);
+	result.steps = step_count;
     return result;
 }
 
@@ -351,6 +357,32 @@ struct FragmentOutput {
   @location(0) colorForCanvas: vec4<f32>,
   @location(1) colorForTexture: vec4<f32>,
   @location(2) worldPosition: vec4<f32>,
+  @location(3) heatmap: vec4<f32>,
+};
+
+// Convert step count to heatmap color
+fn steps_to_heatmap_color(steps: u32, max_steps: u32) -> vec3<f32> {
+    let normalized = f32(steps) / f32(max_steps);
+    let clamped = clamp(normalized, 0.0, 1.0);
+    
+    // Create a heat color gradient: blue -> green -> yellow -> red
+    if (clamped < 0.25) {
+        // Blue to Cyan
+        let t = clamped * 4.0;
+        return vec3(0.0, t, 1.0);
+    } else if (clamped < 0.5) {
+        // Cyan to Green
+        let t = (clamped - 0.25) * 4.0;
+        return vec3(0.0, 1.0, 1.0 - t);
+    } else if (clamped < 0.75) {
+        // Green to Yellow
+        let t = (clamped - 0.5) * 4.0;
+        return vec3(t, 1.0, 0.0);
+    } else {
+        // Yellow to Red
+        let t = (clamped - 0.75) * 4.0;
+        return vec3(1.0, 1.0 - t, 0.0);
+    }
 };
 
 // Calculate motion vectors for TAA
@@ -584,9 +616,26 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   // TAA Implementation - pass the world position from our raycast
   let history_color = taa_sample_history(uv, color, hit.pos, camera_pos, ray_dir);
   
+  // Generate heatmap color based on step count
+  let max_expected_steps = 48u;  // Lower value for more visible heatmap differences
+  let heatmap_color = steps_to_heatmap_color(hit.steps, max_expected_steps);
+  
   var output: FragmentOutput;
-  output.colorForTexture = history_color;
-  output.colorForCanvas = history_color;
+  
+  // Choose output based on render mode
+  if (context.render_mode == 0u) {
+    // Normal rendering mode
+    output.colorForTexture = history_color;
+    output.colorForCanvas = history_color;
+    output.heatmap = vec4(0.0, 0.0, 0.0, 1.0); // Black heatmap when not in heatmap mode
+  } else {
+    // Heatmap rendering mode
+    let heatmap_output = vec4(heatmap_color, 1.0);
+    output.colorForTexture = heatmap_output;
+    output.colorForCanvas = heatmap_output;
+    output.heatmap = heatmap_output;
+  }
+  
   // Store world position for next frame's TAA (w component stores hit validity)
   output.worldPosition = vec4<f32>(hit.pos, select(-1.0, 1.0, hit.pos.x >= -0.001));
   return output;
