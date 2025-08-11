@@ -14,6 +14,7 @@ const MAX_INTERSECTION_TESTS: u32 = 384; // maximum ray-AABB tests before early 
 @group(1) @binding(0) var prevFrameTexture: texture_2d<f32>;
 @group(1) @binding(1) var smpler: sampler;
 @group(1) @binding(2) var prevWorldPosTexture: texture_2d<f32>;
+@group(1) @binding(3) var blueNoiseTexture: texture_2d<f32>;
 
 @vertex
 fn main_vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -76,6 +77,17 @@ struct RayCast {
 	steps: u32
 }
 
+// Blue noise lookup with tiling and temporal variation
+fn sampleBlueNoise(uv: vec2<f32>, offset: f32) -> f32 {
+    // Tile the blue noise texture and add temporal variation
+    let tiled_uv = fract(uv * 8.0 + vec2<f32>(offset * 0.1));
+    let tex_coord = vec2<i32>(tiled_uv * 64.0); // 64 is the blue noise texture size
+    let noise = textureLoad(blueNoiseTexture, tex_coord, 0).r;
+    
+    // Add temporal jitter using frame-based offset
+    return fract(noise + offset);
+}
+
 // Cast a shadow ray to check occlusion between hit point and light source
 fn cast_shadow_ray(from_pos: vec3<f32>, to_pos: vec3<f32>, grid_size: u32) -> bool {
     let shadow_dir = normalize(to_pos - from_pos);
@@ -96,11 +108,11 @@ fn cast_shadow_ray(from_pos: vec3<f32>, to_pos: vec3<f32>, grid_size: u32) -> bo
 }
 
 // Generate a random direction within a cone for soft shadow sampling
-fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>) -> vec3<f32> {
-    // Add per-frame random noise to seed for temporal variation
-    let frame_seed = seed + context.random_seed;
-    let a = fract(sin(frame_seed * 12.9898) * 43758.5453);
-    let b = fract(sin(frame_seed * 93.9898) * 28001.8384);
+fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>, pixel_uv: vec2<f32>) -> vec3<f32> {
+    // Use blue noise for better distribution
+    let frame_offset = context.random_seed + seed;
+    let a = sampleBlueNoise(pixel_uv, frame_offset);
+    let b = sampleBlueNoise(pixel_uv + vec2<f32>(0.5, 0.3), frame_offset + 1.7);
     
     // Convert to spherical coordinates within cone
     let theta = a * 2.0 * 3.14159;
@@ -124,7 +136,7 @@ fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>) -> ve
 }
 
 // Calculate soft shadows by sampling multiple rays within light area
-fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f32, grid_size: u32, samples: u32) -> f32 {
+fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f32, grid_size: u32, samples: u32, pixel_uv: vec2<f32>) -> f32 {
     var shadow_factor = 0.0;
     let base_seed = dot(hit_pos, vec3(12.9898, 78.233, 37.719)) + context.random_seed;
     
@@ -133,7 +145,7 @@ fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f
         
         // Generate random point on light area
         let light_dir = normalize(light_pos - hit_pos);
-        let random_dir = random_cone_direction(seed, light_size, light_dir);
+        let random_dir = random_cone_direction(seed, light_size, light_dir, pixel_uv);
         let sample_light_pos = light_pos + random_dir * light_size * 50.0; // Scale factor for light area
         
         if (!cast_shadow_ray(hit_pos, sample_light_pos, grid_size)) {
@@ -145,11 +157,11 @@ fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f
 }
 
 // Generate random direction in hemisphere above surface normal
-fn random_hemisphere_direction(seed: f32, normal: vec3<f32>) -> vec3<f32> {
-    // Add per-frame random noise to seed for temporal variation
-    let frame_seed = seed + context.random_seed;
-    let a = fract(sin(frame_seed * 12.9898) * 43758.5453);
-    let b = fract(sin(frame_seed * 93.9898) * 28001.8384);
+fn random_hemisphere_direction(seed: f32, normal: vec3<f32>, pixel_uv: vec2<f32>) -> vec3<f32> {
+    // Use blue noise for better distribution
+    let frame_offset = context.random_seed + seed;
+    let a = sampleBlueNoise(pixel_uv + vec2<f32>(0.2, 0.7), frame_offset);
+    let b = sampleBlueNoise(pixel_uv + vec2<f32>(0.8, 0.1), frame_offset + 2.3);
     
     // Generate uniform distribution on hemisphere
     let theta = a * 2.0 * 3.14159;
@@ -173,13 +185,13 @@ fn random_hemisphere_direction(seed: f32, normal: vec3<f32>) -> vec3<f32> {
 }
 
 // Calculate sky light contribution by sampling hemisphere
-fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, samples: u32) -> f32 {
+fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, samples: u32, pixel_uv: vec2<f32>) -> f32 {
     var sky_factor = 0.0;
     let base_seed = dot(hit_pos, vec3(17.531, 41.234, 63.719)) + context.random_seed;
     
     for (var i: u32 = 0u; i < samples; i++) {
         let seed = base_seed + f32(i) * 9.234;
-        let sky_dir = random_hemisphere_direction(seed, normal);
+        let sky_dir = random_hemisphere_direction(seed, normal, pixel_uv);
         
         // Cast ray towards sky - if it doesn't hit anything, we see sky
         let sky_hit = raycast_octree_stack(hit_pos + normal * 0.001, sky_dir, grid_size);
@@ -607,11 +619,11 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
       // --- 3. CALCULATE RAYTRACED SHADOWS ---
       var shadow_factor = 1.0;
       if (diffuse_intensity > 0.0) {
-          shadow_factor = calculate_soft_shadow(hit.pos, light_pos, light_size, context.grid_size, shadow_samples);
+          shadow_factor = calculate_soft_shadow(hit.pos, light_pos, light_size, context.grid_size, shadow_samples, uv);
       }
 
       // --- 4. CALCULATE SKY LIGHT ---
-      let sky_visibility = calculate_sky_light(hit.pos, normal, context.grid_size, sky_samples);
+      let sky_visibility = calculate_sky_light(hit.pos, normal, context.grid_size, sky_samples, uv);
       let sky_contribution = sky_color * sky_intensity * sky_visibility;
 
       // --- 5. (OPTIONAL) ADD SPECULAR HIGHLIGHTS (BLINN-PHONG) ---

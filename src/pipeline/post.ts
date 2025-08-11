@@ -1,5 +1,6 @@
 import {device, context, canvas, contextUniform} from "../index";
 import {Noise} from "./noise";
+import {BlueNoise} from "./bluenoise";
 import shader from "./post.wgsl" with {type: "text"};
 
 export class Post {
@@ -7,6 +8,7 @@ export class Post {
 
 	uniformBindGroup: GPUBindGroup;
 	noise: Noise;
+	blueNoise: BlueNoise;
 
 	frameBuffers: GPUTexture[] = [];
 	worldPosBuffers: GPUTexture[] = [];
@@ -57,6 +59,11 @@ export class Post {
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
 					texture: { sampleType: 'unfilterable-float' }
+				},
+				{
+					binding: 3,
+					visibility: GPUShaderStage.FRAGMENT,
+					texture: { sampleType: 'float' }
 				}
 			]
 		});
@@ -117,6 +124,9 @@ export class Post {
 			size: 16,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
+
+		// Initialize blue noise
+		this.blueNoise = new BlueNoise();
 
 		this.resizeFrameBuffer();
 	}
@@ -264,7 +274,8 @@ export class Post {
 			entries: [
 				{binding: 0, resource: this.frameBuffers[0].createView()},
 				{binding: 1, resource: this.sampler},
-				{binding: 2, resource: this.worldPosBuffers[0].createView()}
+				{binding: 2, resource: this.worldPosBuffers[0].createView()},
+				{binding: 3, resource: this.blueNoise.getTextureView()}
 			]
 		}));
 
@@ -273,7 +284,8 @@ export class Post {
 			entries: [
 				{binding: 0, resource: this.frameBuffers[1].createView()},
 				{binding: 1, resource: this.sampler},
-				{binding: 2, resource: this.worldPosBuffers[1].createView()}
+				{binding: 2, resource: this.worldPosBuffers[1].createView()},
+				{binding: 3, resource: this.blueNoise.getTextureView()}
 			]
 		}));
 	}
