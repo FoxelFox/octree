@@ -14,7 +14,8 @@ export class ContextUniform {
 		3   + // camera velocity
 		1   + // frame count
 		1   + // render mode
-		5     // padding to reach 416 bytes (104 floats * 4 bytes = 416)
+		1   + // random seed
+		4     // padding to reach 416 bytes (104 floats * 4 bytes = 416)
 
 	);
 	uniformBuffer: GPUBuffer;
@@ -111,8 +112,11 @@ export class ContextUniform {
 		// Store render mode
 		integer[o++] = renderMode.current;
 		
+		// Store random seed for per-frame noise
+		this.uniformArray[o++] = Math.random() * 1000.0;
+		
 		// Add padding to reach required buffer size
-		o += 4;
+		o += 3;
 
 		// Calculate and store current view-projection for next frame (without jitter for motion vectors)
 		const currentViewProjection = mat4.multiply(perspective, view);

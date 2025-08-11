@@ -7,6 +7,7 @@ struct Octree {
 
 const INVALID_INDEX: u32 = 0xFFFFFFFFu;
 const MAX_STACK: u32 = 24u; // must be >= context.max_depth + a small margin
+const MAX_INTERSECTION_TESTS: u32 = 384; // maximum ray-AABB tests before early termination
 
 @group(0) @binding(0) var <uniform> context: Context;
 @group(0) @binding(1) var<storage, read_write> nodes: array<Octree>;
@@ -96,9 +97,10 @@ fn cast_shadow_ray(from_pos: vec3<f32>, to_pos: vec3<f32>, grid_size: u32) -> bo
 
 // Generate a random direction within a cone for soft shadow sampling
 fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>) -> vec3<f32> {
-    // Simple pseudo-random based on seed
-    let a = fract(sin(seed * 12.9898) * 43758.5453);
-    let b = fract(sin(seed * 93.9898) * 28001.8384);
+    // Add per-frame random noise to seed for temporal variation
+    let frame_seed = seed + context.random_seed;
+    let a = fract(sin(frame_seed * 12.9898) * 43758.5453);
+    let b = fract(sin(frame_seed * 93.9898) * 28001.8384);
     
     // Convert to spherical coordinates within cone
     let theta = a * 2.0 * 3.14159;
@@ -124,7 +126,7 @@ fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>) -> ve
 // Calculate soft shadows by sampling multiple rays within light area
 fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f32, grid_size: u32, samples: u32) -> f32 {
     var shadow_factor = 0.0;
-    let base_seed = dot(hit_pos, vec3(12.9898, 78.233, 37.719));
+    let base_seed = dot(hit_pos, vec3(12.9898, 78.233, 37.719)) + context.random_seed;
     
     for (var i: u32 = 0u; i < samples; i++) {
         let seed = base_seed + f32(i) * 7.531;
@@ -144,9 +146,10 @@ fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f
 
 // Generate random direction in hemisphere above surface normal
 fn random_hemisphere_direction(seed: f32, normal: vec3<f32>) -> vec3<f32> {
-    // Simple pseudo-random based on seed
-    let a = fract(sin(seed * 12.9898) * 43758.5453);
-    let b = fract(sin(seed * 93.9898) * 28001.8384);
+    // Add per-frame random noise to seed for temporal variation
+    let frame_seed = seed + context.random_seed;
+    let a = fract(sin(frame_seed * 12.9898) * 43758.5453);
+    let b = fract(sin(frame_seed * 93.9898) * 28001.8384);
     
     // Generate uniform distribution on hemisphere
     let theta = a * 2.0 * 3.14159;
@@ -172,7 +175,7 @@ fn random_hemisphere_direction(seed: f32, normal: vec3<f32>) -> vec3<f32> {
 // Calculate sky light contribution by sampling hemisphere
 fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, samples: u32) -> f32 {
     var sky_factor = 0.0;
-    let base_seed = dot(hit_pos, vec3(17.531, 41.234, 63.719));
+    let base_seed = dot(hit_pos, vec3(17.531, 41.234, 63.719)) + context.random_seed;
     
     for (var i: u32 = 0u; i < samples; i++) {
         let seed = base_seed + f32(i) * 9.234;
@@ -193,6 +196,7 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
 fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
 	var result: RayCast;
 	var step_count: u32 = 0u;
+	var intersection_test_count: u32 = 0u;
     // Root AABB in world coordinates: [0, grid_size]
     let gs_f = f32(grid_size);
     let root_min = vec3<f32>(0.0, 0.0, 0.0);
@@ -200,6 +204,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
     // quick root intersection
     let root_tt = ray_aabb_intersect(ray_origin, ray_dir, root_min, root_max);
+    intersection_test_count = intersection_test_count + 1u;
     if (root_tt.x > root_tt.y) {
     	// no hit
     	result.data = 0;
@@ -279,11 +284,17 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
         // test all 8 octants
         for (var oct: u32 = 0u; oct < 8u; oct = oct + 1u) {
+            // check intersection test limit
+            if (intersection_test_count >= MAX_INTERSECTION_TESTS) {
+                break;
+            }
+            
             // compute child AABB
             let cmin = child_min_from_parent(node_min, node_size_f, oct);
             let cmax = cmin + vec3<f32>(child_size, child_size, child_size);
 
             let tt = ray_aabb_intersect(ray_origin, ray_dir, cmin, cmax);
+            intersection_test_count = intersection_test_count + 1u;
 
             // The intersection interval [tt.x, tt.y] must be valid AND
             // overlap with the parent's interval, which starts at node_tentry.
@@ -304,6 +315,11 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
         if (child_count == 0u) {
             // nothing below this node
             continue;
+        }
+
+        // check if we should terminate due to too many intersection tests
+        if (intersection_test_count >= MAX_INTERSECTION_TESTS) {
+            break;
         }
 
         // sort child lists by entry t ascending (insertion sort for <= 8 elements)
@@ -395,8 +411,8 @@ fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir:
         
         // Create non-jittered projection by removing jitter from the current perspective matrix
         var unjittered_perspective = context.perspective;
-        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x
-        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y
+        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x offset
+        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y offset
         
         // Transform world position to current frame's clip space (without jitter)
         let current_view_proj = unjittered_perspective * context.view;
@@ -455,33 +471,36 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     let history_uv = current_uv + motion_vector;
 
     // FIX: Perform ALL texture samples/loads upfront, in uniform control flow.
-    let history_coord_i = vec2<i32>(history_uv * context.resolution);
+    let history_coord_i = vec2<i32>(clamp(history_uv, vec2(0.0), vec2(0.999)) * context.resolution);
     let prev_frame_data = textureLoad(prevWorldPosTexture, history_coord_i, 0);
     let history_color = textureSample(prevFrameTexture, smpler, history_uv);
     
-    // Sample current pixel neighborhood for voxel edge detection
+    // Sample current pixel neighborhood for voxel edge detection and color bounds
     let pixel_coord = vec2<i32>(current_uv * context.resolution);
     
-    // Sample neighborhood colors for clamping
-    var neighbor_min = vec4(1.0);
-    var neighbor_max = vec4(0.0);
+    // Sample neighborhood colors for clamping (use current frame for proper bounds)
+    var current_min = vec4(1.0);
+    var current_max = vec4(0.0);
     var near_voxel_edge = false;
+    
+    // First pass: check current frame neighborhood for edge detection and color bounds
     for (var y: i32 = -1; y <= 1; y++) {
         for (var x: i32 = -1; x <= 1; x++) {
             let neighbor_coord = pixel_coord + vec2(x, y);
             let neighbor_world_data = textureLoad(prevWorldPosTexture, neighbor_coord, 0);
-            let sample_color = textureLoad(prevFrameTexture, history_coord_i + vec2(x, y), 0);
             
             // Check for voxel hits in neighborhood
             if (neighbor_world_data.w > 0.0) {
                 near_voxel_edge = true;
             }
-            
-            // Update color bounds
-            neighbor_min = min(neighbor_min, sample_color);
-            neighbor_max = max(neighbor_max, sample_color);
         }
     }
+    
+    // Second pass: sample current frame colors for proper neighborhood clamping
+    // Note: We can't easily sample current frame colors here since we're in the fragment shader
+    // Instead, we'll use a simpler approach with the current pixel color as reference
+    current_min = current_color * 0.8;  // Allow some variation
+    current_max = current_color * 1.2;
     
     // For background pixels, check if we're near voxel edges for anti-aliasing
     if (!has_current_hit && !near_voxel_edge) {
@@ -498,6 +517,14 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     }
 
     let prev_world_pos = prev_frame_data.xyz;
+    
+    // Check if previous frame data is valid (not uninitialized)
+    let prev_data_valid = abs(prev_frame_data.w) > 0.5; // w should be -1.0 or 1.0, not 0.0
+    if (!prev_data_valid) {
+        // No valid previous frame data (first frame or uninitialized), reject history
+        return current_color;
+    }
+    
     let had_prev_hit = prev_frame_data.w > 0.0;
 
     // We combine the hit checks. History is valid if the hit status hasn't changed
@@ -512,15 +539,27 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
         }
     }
 
-    // 4. If history is invalid, we clamp the aliased current color into the historical neighborhood.
+    // 4. If history is invalid, we clamp the history color to current neighborhood.
     var blend_target = current_color;
+    var clamped_history = history_color;
     if (!is_history_valid) {
-        blend_target = clamp(current_color, neighbor_min, neighbor_max);
+        // Clamp history color to current color bounds to reduce ghosting
+        clamped_history = clamp(history_color, current_min, current_max);
     }
 
-    // 5. Blend the history with our (potentially clamped) current color.
-    let blend_factor = 0.1;
-    return mix(history_color, blend_target, blend_factor);
+    // 5. Blend with adaptive blend factor based on history validity and motion
+    let motion_magnitude = length(motion_vector);
+    var blend_factor: f32;
+    
+    if (is_history_valid) {
+        // Valid history: use low blend factor, but increase with motion
+        blend_factor = mix(0.01, 0.1, clamp(motion_magnitude * 10.0, 0.0, 1.0));
+    } else {
+        // Invalid history: use higher blend factor but not too aggressive
+        blend_factor = 0.3;
+    }
+    
+    return mix(clamped_history, blend_target, blend_factor);
 }
 
 @fragment

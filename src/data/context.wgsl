@@ -15,4 +15,5 @@ struct Context {
   camera_velocity: vec3<f32>,
   frame_count: u32,
   render_mode: u32,
+  random_seed: f32,
 }
