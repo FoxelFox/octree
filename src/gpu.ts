@@ -48,17 +48,30 @@ export class GPUContext {
   }
 
   async init() {
+    let errorMessage = '';
     try {
-      if (navigator.gpu) {
+      if (!navigator.gpu) {
+        errorMessage = 'WebGPU not supported in this browser';
+      } else {
         const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-        this.device = await adapter.requestDevice({
-			requiredFeatures: ['timestamp-query'],
-			requiredLimits: {
-				maxBufferSize: adapter.limits.maxBufferSize,
-				maxStorageBufferBindingSize: 2147483644
-			}
-		});
+        if (!adapter) {
+          errorMessage = 'No suitable GPU adapter found';
+        } else {
+          try {
+            this.device = await adapter.requestDevice({
+              requiredFeatures: ['timestamp-query'],
+              requiredLimits: {
+                maxBufferSize: adapter.limits.maxBufferSize,
+                maxStorageBufferBindingSize: 1073741824
+              }
+            });
+          } catch (deviceError) {
+            errorMessage = `Failed to create WebGPU device: ${deviceError.message}`;
+          }
+        }
       }
+    } catch (error) {
+      errorMessage = `WebGPU initialization error: ${error.message}`;
     } finally {
       if (!this.device) {
         document.body.innerHTML = '' +
@@ -66,6 +79,7 @@ export class GPUContext {
           '<h1>No GPU available 😔</h1>' +
           '<p>You need a WebGPU compatible browser</p>' +
           '<a style="color: brown" href="https://caniuse.com/webgpu">https://caniuse.com/webgpu</a>' +
+          (errorMessage ? `<br><br><strong>Error details:</strong><br><code>${errorMessage}</code>` : '') +
           '</div> ';
       }
     }

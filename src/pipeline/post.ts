@@ -194,7 +194,13 @@ export class Post {
 				const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
 				const startTime = times[0];
 				const endTime = times[1];
-				this.renderTime = Number(endTime - startTime) / 1_000_000; // Convert to milliseconds
+				
+				// Only update if we have valid timestamps
+				if (startTime > 0n && endTime > 0n && endTime >= startTime) {
+					const duration = endTime - startTime;
+					this.renderTime = Number(duration) / 1_000_000; // Convert to milliseconds
+				}
+				// Keep previous renderTime value if timestamps are invalid
 				
 				this.queryReadbackBuffer.unmap();
 				this.isReadingTiming = false;
