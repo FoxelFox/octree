@@ -13,6 +13,14 @@ export class Post {
 	frameBufferBindgroups: GPUBindGroup[] = [];
 	sampler: GPUSampler;
 
+	// timing
+	querySet: GPUQuerySet;
+	queryBuffer: GPUBuffer;
+	queryReadbackBuffer: GPUBuffer;
+	isReadingTiming: boolean = false;
+	renderTime: number = 0;
+	lastTimingFrame: number = 0;
+
 	frame = 0;
 
 	constructor() {
@@ -92,8 +100,21 @@ export class Post {
 			}
 		});
 
-		// Will be created in init() after noise is set
+		// Create timestamp query set for precise timing
+		this.querySet = device.createQuerySet({
+			type: 'timestamp',
+			count: 2, // start and end timestamps
+		});
 
+		this.queryBuffer = device.createBuffer({
+			size: 16, // 2 timestamps * 8 bytes each
+			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.queryReadbackBuffer = device.createBuffer({
+			size: 16,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
 
 		this.resizeFrameBuffer();
 	}
@@ -127,6 +148,9 @@ export class Post {
 			this.resizeFrameBuffer();
 		}
 
+		// Only do timing every 60 frames to avoid conflicts
+		const shouldMeasureTiming = !this.isReadingTiming && (this.frame - this.lastTimingFrame) > 60;
+
 		const passEncoder = commandEncoder.beginRenderPass({
 			colorAttachments: [{
 				view: context.getCurrentTexture().createView(),
@@ -140,7 +164,12 @@ export class Post {
 				view: this.worldPosBuffers[(this.frame + 1) % 2].createView(),
 				loadOp: 'load',
 				storeOp: 'store',
-			}]
+			}],
+			timestampWrites: shouldMeasureTiming ? {
+				querySet: this.querySet,
+				beginningOfPassWriteIndex: 0,
+				endOfPassWriteIndex: 1,
+			} : undefined,
 		});
 		passEncoder.setPipeline(this.pipeline);
 		passEncoder.setBindGroup(0, this.uniformBindGroup);
@@ -148,11 +177,32 @@ export class Post {
 		passEncoder.draw(6);
 		passEncoder.end();
 
+		// Only resolve timestamp queries when measuring
+		if (shouldMeasureTiming) {
+			commandEncoder.resolveQuerySet(this.querySet, 0, 2, this.queryBuffer, 0);
+			commandEncoder.copyBufferToBuffer(this.queryBuffer, 0, this.queryReadbackBuffer, 0, 16);
+			this.lastTimingFrame = this.frame;
+		}
+
 		this.frame++
 	}
 
 	afterUpdate() {
-
+		if (!this.isReadingTiming && (this.frame - this.lastTimingFrame) === 1) {
+			this.isReadingTiming = true;
+			this.queryReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+				const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
+				const startTime = times[0];
+				const endTime = times[1];
+				this.renderTime = Number(endTime - startTime) / 1_000_000; // Convert to milliseconds
+				
+				this.queryReadbackBuffer.unmap();
+				this.isReadingTiming = false;
+			}).catch(() => {
+				// Handle mapping failure gracefully
+				this.isReadingTiming = false;
+			});
+		}
 	}
 
 	resizeFrameBuffer() {

@@ -12,6 +12,12 @@ export class Noise {
 	noiseReadbackBuffer: GPUBuffer
 	nodesReadbackBuffer: GPUBuffer
 	isReading: boolean
+	
+	// timing
+	querySet: GPUQuerySet
+	queryBuffer: GPUBuffer
+	queryReadbackBuffer: GPUBuffer
+	octreeTime: number = 0
 
 	// output
 	result: Uint32Array;
@@ -48,6 +54,22 @@ export class Noise {
 		});
 
 		device.queue.writeBuffer(this.nodeCounterBuffer, 0, new Uint32Array([0]));
+
+		// Create timestamp query set for precise timing
+		this.querySet = device.createQuerySet({
+			type: 'timestamp',
+			count: 2, // start and end timestamps
+		});
+
+		this.queryBuffer = device.createBuffer({
+			size: 16, // 2 timestamps * 8 bytes each
+			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.queryReadbackBuffer = device.createBuffer({
+			size: 16,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
 
 		this.pipeline = device.createComputePipeline({
 			label: "Noise",
@@ -91,7 +113,13 @@ export class Noise {
 		}
 
 		console.log('generate noise')
-		const computePass = commandEncoder.beginComputePass();
+		const computePass = commandEncoder.beginComputePass({
+			timestampWrites: {
+				querySet: this.querySet,
+				beginningOfPassWriteIndex: 0,
+				endOfPassWriteIndex: 1,
+			},
+		});
 		computePass.setPipeline(this.pipeline);
 		computePass.setBindGroup(0, this.bindGroup0);
 		computePass.setBindGroup(1, this.bindGroup1);
@@ -101,6 +129,10 @@ export class Noise {
 			Math.ceil(gridSize / 4)
 		);
 		computePass.end();
+
+		// Resolve timestamp queries
+		commandEncoder.resolveQuerySet(this.querySet, 0, 2, this.queryBuffer, 0);
+		commandEncoder.copyBufferToBuffer(this.queryBuffer, 0, this.queryReadbackBuffer, 0, 16);
 
 		const size = Math.pow(gridSize, 3) * 4;
 
@@ -123,6 +155,18 @@ export class Noise {
 		}
 
 		this.isReading = true;
+		
+		// Read timing data
+		this.queryReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+			const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
+			const startTime = times[0];
+			const endTime = times[1];
+			this.octreeTime = Number(endTime - startTime) / 1_000_000; // Convert to milliseconds
+			
+			console.log(`Octree generation time: ${this.octreeTime.toFixed(3)} ms`);
+			this.queryReadbackBuffer.unmap();
+		});
+		
 		this.noiseReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
 			const mappedData = new Uint32Array(this.noiseReadbackBuffer.getMappedRange());
 			this.result = new Uint32Array(mappedData);

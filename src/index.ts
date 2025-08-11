@@ -20,7 +20,7 @@ export const contextUniform = new ContextUniform();
 
 
 console.log('maxDepth:', maxDepth);
-console.log('gridSize:', gridSize)
+console.log('gridSize:', gridSize);
 
 const uniforms = [contextUniform];
 
@@ -32,6 +32,23 @@ const post = new Post();
 post.noise = noise;
 
 const pipelines = [noise, post];
+
+// Create timing display
+const timingDiv = document.createElement('div');
+timingDiv.style.cssText = `
+	position: fixed;
+	top: 10px;
+	left: 10px;
+	background: rgba(0, 0, 0, 0.8);
+	color: white;
+	padding: 10px;
+	font-family: monospace;
+	font-size: 12px;
+	border-radius: 4px;
+	pointer-events: none;
+	z-index: 1000;
+`;
+document.body.appendChild(timingDiv);
 
 loop();
 
@@ -55,6 +72,12 @@ function loop() {
 	for (const pipeline of pipelines) {
 		pipeline.afterUpdate();
 	}
+
+	// Update timing display
+	timingDiv.innerHTML = `
+		Octree: ${noise.octreeTime.toFixed(3)} ms<br>
+		Render: ${post.renderTime.toFixed(3)} ms
+	`;
 
 	requestAnimationFrame(loop);
 }
