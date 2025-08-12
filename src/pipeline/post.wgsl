@@ -60,14 +60,12 @@ fn ray_aabb_intersect(ray_o: vec3<f32>, ray_d: vec3<f32>, box_min: vec3<f32>, bo
 // compute child AABB min given parent min, parent size and octant index
 fn child_min_from_parent(parent_min: vec3<f32>, parent_size: f32, octant: u32) -> vec3<f32> {
     let half = parent_size * 0.5;
-    var cm = parent_min;
-    // x
-    if ((octant & 1u) != 0u) { cm.x = cm.x + half; }
-    // y
-    if ((octant & 2u) != 0u) { cm.y = cm.y + half; }
-    // z
-    if ((octant & 4u) != 0u) { cm.z = cm.z + half; }
-    return cm;
+    let offset = vec3<f32>(
+        f32((octant & 1u) != 0u),
+        f32((octant & 2u) != 0u),
+        f32((octant & 4u) != 0u)
+    );
+    return parent_min + offset * half;
 }
 
 struct RayCast {
@@ -120,10 +118,7 @@ fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>, pixel
     
     // Create orthonormal basis around light direction
     let w = light_dir;
-    var cross_vec = vec3(0.0, 1.0, 0.0);
-    if (abs(w.x) <= 0.1) {
-        cross_vec = vec3(1.0, 0.0, 0.0);
-    }
+    let cross_vec = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(w.x) <= 0.1);
     let u = normalize(cross(cross_vec, w));
     let v = cross(w, u);
     
@@ -169,10 +164,7 @@ fn random_hemisphere_direction(seed: f32, normal: vec3<f32>, pixel_uv: vec2<f32>
     
     // Create orthonormal basis around normal
     let w = normal;
-    var cross_vec = vec3(0.0, 1.0, 0.0);
-    if (abs(w.y) > 0.9) {
-        cross_vec = vec3(1.0, 0.0, 0.0);
-    }
+    let cross_vec = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(w.y) > 0.9);
     let u = normalize(cross(cross_vec, w));
     let v = cross(w, u);
     
@@ -269,20 +261,17 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
                 result.steps = step_count;
 
                 // --- 👇 NORMAL CALCULATION LOGIC ---
-				// Calculate the center of the leaf cube
-				let leaf_center = node_min + vec3<f32>(node_size_f * 0.5);
-				// Vector from the center to the hit point
-				let p = result.pos - leaf_center;
-				// Find the axis with the largest component
-				let abs_p = abs(p);
-				if (abs_p.x > abs_p.y && abs_p.x > abs_p.z) {
-					result.normal = vec3<f32>(sign(p.x), 0.0, 0.0);
-				} else if (abs_p.y > abs_p.z) {
-					result.normal = vec3<f32>(0.0, sign(p.y), 0.0);
-				} else {
-					result.normal = vec3<f32>(0.0, 0.0, sign(p.z));
-				}
-				// --- 👆 END OF NORMAL CALCULATION ---
+                // Calculate the center of the leaf cube
+                let leaf_center = node_min + vec3<f32>(node_size_f * 0.5);
+                // Vector from the center to the hit point
+                let p = result.pos - leaf_center;
+                // Find the axis with the largest component (branchless)
+                let abs_p = abs(p);
+                let is_x = f32(abs_p.x > abs_p.y && abs_p.x > abs_p.z);
+                let is_y = f32(abs_p.y > abs_p.x && abs_p.y > abs_p.z);
+                let is_z = 1.0 - is_x - is_y;
+                result.normal = sign(p) * vec3<f32>(is_x, is_y, is_z);
+                // --- 👆 END OF NORMAL CALCULATION ---
 
                 return result;
             }
@@ -390,87 +379,54 @@ struct FragmentOutput {
 
 // Convert step count to heatmap color
 fn steps_to_heatmap_color(steps: u32, max_steps: u32) -> vec3<f32> {
-    let normalized = f32(steps) / f32(max_steps);
-    let clamped = clamp(normalized, 0.0, 1.0);
-    
-    // Create a heat color gradient: blue -> green -> yellow -> red
-    if (clamped < 0.25) {
-        // Blue to Cyan
-        let t = clamped * 4.0;
-        return vec3(0.0, t, 1.0);
-    } else if (clamped < 0.5) {
-        // Cyan to Green
-        let t = (clamped - 0.25) * 4.0;
-        return vec3(0.0, 1.0, 1.0 - t);
-    } else if (clamped < 0.75) {
-        // Green to Yellow
-        let t = (clamped - 0.5) * 4.0;
-        return vec3(t, 1.0, 0.0);
-    } else {
-        // Yellow to Red
-        let t = (clamped - 0.75) * 4.0;
-        return vec3(1.0, 1.0 - t, 0.0);
-    }
+    let x = clamp(f32(steps) / f32(max_steps), 0.0, 1.0);
+
+    // Gradient using smoothstep for nicer transitions
+    let c1 = vec3(0.0, 0.0, 1.0); // Blue
+    let c2 = vec3(0.0, 1.0, 0.0); // Green
+    let c3 = vec3(1.0, 1.0, 0.0); // Yellow
+    let c4 = vec3(1.0, 0.0, 0.0); // Red
+
+    let t1 = smoothstep(0.0, 0.4, x);
+    let t2 = smoothstep(0.4, 0.7, x);
+    let t3 = smoothstep(0.7, 1.0, x);
+
+    var color = mix(c1, c2, t1);
+    color = mix(color, c3, t2);
+    color = mix(color, c4, t3);
+
+    return color;
 };
 
 // Calculate motion vectors for TAA
 fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir: vec3<f32>, camera_pos: vec3<f32>) -> vec2<f32> {
-    // Check if we have a valid voxel hit
-    if (world_pos.x >= -0.001) {
-        // For voxel hits, use world position-based motion vectors
-        // For motion vectors, we need to use non-jittered projection to get stable reprojection
-        // The jittered perspective is used for rendering, but motion vectors need to be consistent
-        
-        // Create non-jittered projection by removing jitter from the current perspective matrix
-        var unjittered_perspective = context.perspective;
-        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x offset
-        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y offset
-        
-        // Transform world position to current frame's clip space (without jitter)
-        let current_view_proj = unjittered_perspective * context.view;
-        let current_clip = current_view_proj * vec4<f32>(world_pos, 1.0);
-        let current_ndc = current_clip.xyz / current_clip.w;
-        let current_screen_uv = vec2<f32>(current_ndc.x * 0.5 + 0.5, -current_ndc.y * 0.5 + 0.5);
-        
-        // Transform world position to previous frame's clip space (already non-jittered)
-        let prev_clip = context.prev_view_projection * vec4<f32>(world_pos, 1.0);
-        let prev_ndc = prev_clip.xyz / prev_clip.w;
-        let prev_screen_uv = vec2<f32>(prev_ndc.x * 0.5 + 0.5, -prev_ndc.y * 0.5 + 0.5);
-        
-        // Motion vector: how far this pixel moved from previous frame to current frame
-        return prev_screen_uv - current_screen_uv;
-    } else {
-        // For background pixels, calculate motion vector and filter out small movements (translation)
-        let far_distance = 10000.0;
-        let background_world_pos = ray_dir * far_distance;
-        
-        // Create non-jittered projection by removing jitter from the current perspective matrix
-        var unjittered_perspective = context.perspective;
-        unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0;
-        unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0;
-        
-        // Transform background position to current frame's clip space (without jitter)
-        let current_view_proj = unjittered_perspective * context.view;
-        let current_clip = current_view_proj * vec4<f32>(background_world_pos, 1.0);
-        let current_ndc = current_clip.xyz / current_clip.w;
-        let current_screen_uv = vec2<f32>(current_ndc.x * 0.5 + 0.5, -current_ndc.y * 0.5 + 0.5);
-        
-        // Transform background position to previous frame's clip space
-        let prev_clip = context.prev_view_projection * vec4<f32>(background_world_pos, 1.0);
-        let prev_ndc = prev_clip.xyz / prev_clip.w;
-        let prev_screen_uv = vec2<f32>(prev_ndc.x * 0.5 + 0.5, -prev_ndc.y * 0.5 + 0.5);
-        
-        let motion_vec = prev_screen_uv - current_screen_uv;
-        let motion_magnitude = length(motion_vec);
-        
-        // If motion is very small (pure translation), zero it out to avoid artifacts
-        // If motion is significant (rotation), keep it for proper TAA
-        if (motion_magnitude < 0.001) {
-            return vec2<f32>(0.0, 0.0);
-        } else {
-            return motion_vec;
-        }
-    }
+    let has_hit = world_pos.x >= -0.001;
+    let far_distance = 10000.0;
+    let pos_for_motion = select(ray_dir * far_distance, world_pos, has_hit);
+
+    // Create non-jittered projection by removing jitter from the current perspective matrix
+    var unjittered_perspective = context.perspective;
+    unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x offset
+    unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y offset
+    
+    // Transform world position to current frame's clip space (without jitter)
+    let current_view_proj = unjittered_perspective * context.view;
+    let current_clip = current_view_proj * vec4<f32>(pos_for_motion, 1.0);
+    let current_ndc = current_clip.xyz / current_clip.w;
+    let current_screen_uv = vec2<f32>(current_ndc.x * 0.5 + 0.5, -current_ndc.y * 0.5 + 0.5);
+    
+    // Transform world position to previous frame's clip space (already non-jittered)
+    let prev_clip = context.prev_view_projection * vec4<f32>(pos_for_motion, 1.0);
+    let prev_ndc = prev_clip.xyz / prev_clip.w;
+    let prev_screen_uv = vec2<f32>(prev_ndc.x * 0.5 + 0.5, -prev_ndc.y * 0.5 + 0.5);
+    
+    let motion_vec = prev_screen_uv - current_screen_uv;
+
+    // For background, filter out small movements (translation)
+    let motion_magnitude = length(motion_vec);
+    let is_small_motion = motion_magnitude < 0.001;
+    
+    return select(motion_vec, vec2<f32>(0.0), !has_hit && is_small_motion);
 }
 
 // A more robust and stable TAA implementation.
@@ -490,29 +446,18 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     // Sample current pixel neighborhood for voxel edge detection and color bounds
     let pixel_coord = vec2<i32>(current_uv * context.resolution);
     
-    // Sample neighborhood colors for clamping (use current frame for proper bounds)
-    var current_min = vec4(1.0);
-    var current_max = vec4(0.0);
-    var near_voxel_edge = false;
-    
-    // First pass: check current frame neighborhood for edge detection and color bounds
-    for (var y: i32 = -1; y <= 1; y++) {
-        for (var x: i32 = -1; x <= 1; x++) {
-            let neighbor_coord = pixel_coord + vec2(x, y);
-            let neighbor_world_data = textureLoad(prevWorldPosTexture, neighbor_coord, 0);
-            
-            // Check for voxel hits in neighborhood
-            if (neighbor_world_data.w > 0.0) {
-                near_voxel_edge = true;
-            }
-        }
-    }
-    
-    // Second pass: sample current frame colors for proper neighborhood clamping
-    // Note: We can't easily sample current frame colors here since we're in the fragment shader
-    // Instead, we'll use a simpler approach with the current pixel color as reference
-    current_min = current_color * 0.8;  // Allow some variation
-    current_max = current_color * 1.2;
+    // Unrolled neighborhood check
+    let n0 = textureLoad(prevWorldPosTexture, pixel_coord + vec2(-1, -1), 0).w > 0.0;
+    let n1 = textureLoad(prevWorldPosTexture, pixel_coord + vec2( 0, -1), 0).w > 0.0;
+    let n2 = textureLoad(prevWorldPosTexture, pixel_coord + vec2( 1, -1), 0).w > 0.0;
+    let n3 = textureLoad(prevWorldPosTexture, pixel_coord + vec2(-1,  0), 0).w > 0.0;
+    let n4 = textureLoad(prevWorldPosTexture, pixel_coord + vec2( 1,  0), 0).w > 0.0;
+    let n5 = textureLoad(prevWorldPosTexture, pixel_coord + vec2(-1,  1), 0).w > 0.0;
+    let n6 = textureLoad(prevWorldPosTexture, pixel_coord + vec2( 0,  1), 0).w > 0.0;
+    let n7 = textureLoad(prevWorldPosTexture, pixel_coord + vec2( 1,  1), 0).w > 0.0;
+    let n8 = textureLoad(prevWorldPosTexture, pixel_coord, 0).w > 0.0;
+
+    let near_voxel_edge = n0 || n1 || n2 || n3 || n4 || n5 || n6 || n7 || n8;
     
     // For background pixels, check if we're near voxel edges for anti-aliasing
     if (!has_current_hit && !near_voxel_edge) {
@@ -521,28 +466,13 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     }
 
     // 2. Perform History Rejection Checks.
-    let is_in_bounds = history_uv.x >= 0.0 && history_uv.x <= 1.0 &&
-                       history_uv.y >= 0.0 && history_uv.y <= 1.0;
-
-    if (!is_in_bounds) {
-        return current_color;
-    }
-
-    let prev_world_pos = prev_frame_data.xyz;
-    
-    // Check if previous frame data is valid (not uninitialized)
-    let prev_data_valid = abs(prev_frame_data.w) > 0.5; // w should be -1.0 or 1.0, not 0.0
-    if (!prev_data_valid) {
-        // No valid previous frame data (first frame or uninitialized), reject history
-        return current_color;
-    }
-    
+    let is_in_bounds = all(history_uv >= vec2<f32>(0.0)) && all(history_uv <= vec2<f32>(1.0));
+    let prev_data_valid = abs(prev_frame_data.w) > 0.5;
     let had_prev_hit = prev_frame_data.w > 0.0;
+    var is_history_valid = is_in_bounds && prev_data_valid && (has_current_hit == had_prev_hit);
 
-    // We combine the hit checks. History is valid if the hit status hasn't changed
-    // OR if the world position is still coherent.
-    var is_history_valid = (has_current_hit == had_prev_hit);
     if (is_history_valid && has_current_hit) {
+        let prev_world_pos = prev_frame_data.xyz;
         let world_pos_diff = distance(world_hit_pos, prev_world_pos);
         let depth = distance(world_hit_pos, camera_pos);
         let rejection_threshold = max(0.5, depth * 0.01);
@@ -552,26 +482,18 @@ fn taa_sample_history(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit
     }
 
     // 4. If history is invalid, we clamp the history color to current neighborhood.
-    var blend_target = current_color;
-    var clamped_history = history_color;
-    if (!is_history_valid) {
-        // Clamp history color to current color bounds to reduce ghosting
-        clamped_history = clamp(history_color, current_min, current_max);
-    }
+    let current_min = current_color * 0.8;  // Allow some variation
+    let current_max = current_color * 1.2;
+    let clamped_history = clamp(history_color, current_min, current_max);
+    let blend_target = select(clamped_history, current_color, is_history_valid);
 
     // 5. Blend with adaptive blend factor based on history validity and motion
     let motion_magnitude = length(motion_vector);
-    var blend_factor: f32;
+    let valid_history_blend = mix(0.01, 0.1, clamp(motion_magnitude * 10.0, 0.0, 1.0));
+    let invalid_history_blend = 0.3;
+    let blend_factor = select(invalid_history_blend, valid_history_blend, is_history_valid);
     
-    if (is_history_valid) {
-        // Valid history: use low blend factor, but increase with motion
-        blend_factor = mix(0.01, 0.1, clamp(motion_magnitude * 10.0, 0.0, 1.0));
-    } else {
-        // Invalid history: use higher blend factor but not too aggressive
-        blend_factor = 0.3;
-    }
-    
-    return mix(clamped_history, blend_target, blend_factor);
+    return mix(history_color, blend_target, blend_factor);
 }
 
 @fragment
