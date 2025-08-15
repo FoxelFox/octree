@@ -2,7 +2,7 @@ import {GPUContext} from "./gpu";
 import {Post} from "./pipeline/post";
 import {ContextUniform} from "./data/context";
 import {Noise} from "./pipeline/noise";
-import {Block} from "./pipeline/block";
+import {Compact} from "./pipeline/compact";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -19,23 +19,20 @@ export const time = gpu.time;
 export const renderMode = gpu.renderMode;
 export const contextUniform = new ContextUniform();
 
-
 console.log('maxDepth:', maxDepth);
 console.log('gridSize:', gridSize);
 
 const uniforms = [contextUniform];
 
+// --- Setup Pipelines ---
 const noise = new Noise();
+const compact = new Compact(noise);
 const post = new Post();
-//const block = new Block();
+post.compact = compact;
 
-//block.noise = noise;
-post.noise = noise;
-
-const pipelines = [noise, post];
-
-// Create timing display
+// --- Timing Display ---
 const timingDiv = document.createElement('div');
+document.body.appendChild(timingDiv);
 timingDiv.style.cssText = `
 	position: fixed;
 	top: 10px;
@@ -49,8 +46,30 @@ timingDiv.style.cssText = `
 	pointer-events: none;
 	z-index: 1000;
 `;
-document.body.appendChild(timingDiv);
 
+async function runOneTimeSetup() {
+	gpu.update();
+
+	for (const uniform of uniforms) {
+		uniform.update();
+	}
+
+    console.log("Running one-time octree generation and compaction...");
+    const setupEncoder = device.createCommandEncoder();
+    noise.update(setupEncoder);
+    compact.update(setupEncoder);
+    device.queue.submit([setupEncoder.finish()]);
+
+    // Explicitly wait for the GPU to finish all submitted work.
+    await device.queue.onSubmittedWorkDone();
+
+    // Now that we know the GPU is done, read back the data.
+    await noise.readback();
+    await compact.readback();
+    console.log("Setup complete.");
+}
+
+await runOneTimeSetup();
 loop();
 
 // this has to be set after first render loop due to safari bug
@@ -64,19 +83,17 @@ function loop() {
 	}
 
 	const updateEncoder = device.createCommandEncoder();
-	for (const pipeline of pipelines) {
-		pipeline.update(updateEncoder);
-	}
+	post.update(updateEncoder);
 	device.queue.submit([updateEncoder.finish()]);
 
-
-	for (const pipeline of pipelines) {
-		pipeline.afterUpdate();
-	}
+	post.afterUpdate();
 
 	// Update timing display
 	timingDiv.innerHTML = `
-		Octree: ${noise.octreeTime.toFixed(3)} ms<br>
+        <b>One-Time Setup</b><br>
+		Octree Gen: ${noise.octreeTime.toFixed(3)} ms<br>
+		Octree Compact: ${compact.compactTime.toFixed(3)} ms<br><br>
+        <b>Per Frame</b><br>
 		Render: ${post.renderTime.toFixed(3)} ms
 	`;
 

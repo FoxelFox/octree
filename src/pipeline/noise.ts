@@ -144,7 +144,7 @@ export class Noise {
 
 	}
 
-	afterUpdate() {
+	async readback() {
 
 		if (this.result) {
 			return;

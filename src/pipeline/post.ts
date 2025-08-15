@@ -1,5 +1,5 @@
 import {device, context, canvas, contextUniform} from "../index";
-import {Noise} from "./noise";
+import {Compact} from "./compact";
 import {BlueNoise} from "./bluenoise";
 import shader from "./post.wgsl" with {type: "text"};
 
@@ -7,7 +7,7 @@ export class Post {
 	pipeline: GPURenderPipeline;
 
 	uniformBindGroup: GPUBindGroup;
-	noise: Noise;
+	compact: Compact;
 	blueNoise: BlueNoise;
 
 	frameBuffers: GPUTexture[] = [];
@@ -38,7 +38,7 @@ export class Post {
 				{
 					binding: 1,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: { type: 'storage' }
+					buffer: { type: 'read-only-storage' }
 				}
 			]
 		});
@@ -132,8 +132,8 @@ export class Post {
 	}
 
 	init() {
-		if (!this.noise) {
-			throw new Error('Noise must be set before calling init()');
+		if (!this.compact) {
+			throw new Error('Compact must be set before calling init()');
 		}
 
 		this.uniformBindGroup = device.createBindGroup({
@@ -145,7 +145,7 @@ export class Post {
 				},
 				{
 					binding: 1,
-					resource: {buffer: this.noise.nodesBuffer}
+					resource: {buffer: this.compact.compactNodesBuffer}
 				}
 			]
 		});
