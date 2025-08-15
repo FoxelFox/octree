@@ -132,24 +132,20 @@ fn random_cone_direction(seed: f32, cone_angle: f32, light_dir: vec3<f32>, pixel
 }
 
 // Calculate soft shadows by sampling multiple rays within light area
-fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f32, grid_size: u32, samples: u32, pixel_uv: vec2<f32>) -> f32 {
+fn calculate_soft_shadow(hit_pos: vec3<f32>, light_pos: vec3<f32>, light_size: f32, grid_size: u32, pixel_uv: vec2<f32>) -> f32 {
     var shadow_factor = 0.0;
-    let base_seed = dot(hit_pos, vec3(12.9898, 78.233, 37.719)) + context.random_seed;
+    let seed = dot(hit_pos, vec3(12.9898, 78.233, 37.719)) + context.random_seed;
+
+	// Generate random point on light area
+	let light_dir = normalize(light_pos - hit_pos);
+	let random_dir = random_cone_direction(seed, light_size, light_dir, pixel_uv);
+	let sample_light_pos = light_pos + random_dir * light_size * 50.0; // Scale factor for light area
+
+	if (!cast_shadow_ray(hit_pos, sample_light_pos, grid_size)) {
+		shadow_factor += 1.0;
+	}
     
-    for (var i: u32 = 0u; i < samples; i++) {
-        let seed = base_seed + f32(i) * 7.531;
-        
-        // Generate random point on light area
-        let light_dir = normalize(light_pos - hit_pos);
-        let random_dir = random_cone_direction(seed, light_size, light_dir, pixel_uv);
-        let sample_light_pos = light_pos + random_dir * light_size * 50.0; // Scale factor for light area
-        
-        if (!cast_shadow_ray(hit_pos, sample_light_pos, grid_size)) {
-            shadow_factor += 1.0;
-        }
-    }
-    
-    return shadow_factor / f32(samples);
+    return shadow_factor;
 }
 
 // Generate random direction in hemisphere above surface normal
@@ -197,34 +193,34 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
     return sky_factor / f32(samples);
 }
 
-// Stack-based octree raycast for the compact node structure.
-fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
-	var result: RayCast;
-	result.pos = vec3<f32>(-1.0);
-	result.data = 0u;
-	result.steps = 0u;
+struct StackEntry {
+    node_index: u32,
+    t_entry: f32,
+    min: vec3<f32>,
+    size: f32,
+};
 
-	var intersection_test_count: u32 = 0u;
+// A corrected and optimized stack-based raycast implementation.
+fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
+    var result: RayCast;
+    result.pos = vec3<f32>(-1.0);
+    result.data = 0u;
+    result.steps = 0u;
+
     let gs_f = f32(grid_size);
     let root_min = vec3<f32>(0.0);
     let root_max = vec3<f32>(gs_f);
 
     let root_tt = ray_aabb_intersect(ray_origin, ray_dir, root_min, root_max);
-    intersection_test_count = intersection_test_count + 1u;
     if (root_tt.x > root_tt.y) {
-    	return result;
+        return result;
     }
 
-    var stack_node_index: array<u32, MAX_STACK>;
-    var stack_node_min: array<vec3<f32>, MAX_STACK>;
-    var stack_node_size: array<f32, MAX_STACK>;
-    var stack_tentry: array<f32, MAX_STACK>;
+    var stack: array<StackEntry, MAX_STACK>;
     var sp: u32 = 0u;
 
-    stack_node_index[0] = 0u;
-    stack_node_min[0] = root_min;
-    stack_node_size[0] = gs_f;
-    stack_tentry[0] = max(root_tt.x, 0.0);
+    // Push the root node onto the stack.
+    stack[0] = StackEntry(0u, max(root_tt.x, 0.0), root_min, gs_f);
     sp = 1u;
 
     var child_octant_list: array<u32, 8>;
@@ -232,24 +228,20 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
     while (sp > 0u) {
         sp = sp - 1u;
-        let node_index = stack_node_index[sp];
-        let node_min = stack_node_min[sp];
-        let node_size = stack_node_size[sp];
-        let node_tentry = stack_tentry[sp];
-        
+        let entry = stack[sp];
         result.steps = result.steps + 1u;
 
-		let node = nodes[node_index];
-		let is_leaf = (node.firstChildOrData & LEAF_BIT) != 0u;
+        let node = nodes[entry.node_index];
+        let is_leaf = (node.firstChildOrData & LEAF_BIT) != 0u;
 
-        if (is_leaf || node_size <= 1.0) {
+        if (is_leaf || entry.size <= 1.0) {
             let data = node.firstChildOrData & ~LEAF_BIT;
             if (data > 0u) {
-                let t_hit = max(node_tentry, 0.0);
+                let t_hit = max(entry.t_entry, 0.0);
                 result.pos = ray_origin + ray_dir * t_hit;
                 result.data = data;
 
-                let leaf_center = node_min + vec3<f32>(node_size * 0.5);
+                let leaf_center = entry.min + vec3<f32>(entry.size * 0.5);
                 let p = result.pos - leaf_center;
                 let abs_p = abs(p);
                 let is_x = f32(abs_p.x > abs_p.y && abs_p.x > abs_p.z);
@@ -266,27 +258,23 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
             continue;
         }
 
-        let child_size = node_size * 0.5;
-		var child_count = 0u;
+        let child_size = entry.size * 0.5;
+        var child_count = 0u;
 
         for (var oct: u32 = 0u; oct < 8u; oct = oct + 1u) {
             if ((child_mask & (1u << oct)) != 0u) {
-				if (intersection_test_count >= MAX_INTERSECTION_TESTS) { break; }
-				
-                let cmin = child_min_from_parent(node_min, node_size, oct);
+                let cmin = child_min_from_parent(entry.min, entry.size, oct);
                 let cmax = cmin + vec3<f32>(child_size);
                 let tt = ray_aabb_intersect(ray_origin, ray_dir, cmin, cmax);
-                intersection_test_count = intersection_test_count + 1u;
 
-                if (tt.x <= tt.y && tt.y >= node_tentry) {
+                if (tt.x <= tt.y && tt.y >= entry.t_entry) {
                     child_octant_list[child_count] = oct;
-                    child_t_list[child_count] = max(tt.x, node_tentry);
+                    child_t_list[child_count] = max(tt.x, entry.t_entry);
                     child_count = child_count + 1u;
                 }
             }
         }
 
-		if (intersection_test_count >= MAX_INTERSECTION_TESTS) { break; }
         if (child_count == 0u) { continue; }
 
         // Sort the intersected children by their t-value (insertion sort)
@@ -312,11 +300,9 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
             let child_offset = countOneBits(child_mask & ((1u << octant) - 1u));
             let child_node_index = node.firstChildOrData + child_offset;
+            let cmin = child_min_from_parent(entry.min, entry.size, octant);
 
-            stack_node_index[sp] = child_node_index;
-            stack_node_min[sp] = child_min_from_parent(node_min, node_size, octant);
-            stack_node_size[sp] = child_size;
-            stack_tentry[sp] = child_t_list[sorted_index];
+            stack[sp] = StackEntry(child_node_index, child_t_list[sorted_index], cmin, child_size);
             sp = sp + 1u;
         }
     }
@@ -486,7 +472,6 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
       
       // Sun light parameters  
       let light_size = 0.5; // Size of the light source (affects shadow softness)
-      let shadow_samples = 1u; // Number of shadow rays (higher = smoother but slower)
 
       // --- 2. CALCULATE DIFFUSE LIGHTING (LAMBERTIAN) ---
       // The max() prevents surfaces facing away from the light from becoming negative
@@ -495,7 +480,7 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
       // --- 3. CALCULATE RAYTRACED SHADOWS ---
       var shadow_factor = 1.0;
       if (diffuse_intensity > 0.0) {
-          shadow_factor = calculate_soft_shadow(hit.pos, light_pos, light_size, context.grid_size, shadow_samples, uv);
+          shadow_factor = calculate_soft_shadow(hit.pos, light_pos, light_size, context.grid_size, uv);
       }
 
       // --- 4. CALCULATE SKY LIGHT ---
