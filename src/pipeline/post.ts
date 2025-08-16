@@ -160,8 +160,8 @@ export class Post {
 			this.resizeFrameBuffer();
 		}
 
-		// Only do timing every 60 frames to avoid conflicts
-		const shouldMeasureTiming = !this.isReadingTiming && (this.frame - this.lastTimingFrame) > 60;
+		// Measure timing every frame for frame graph
+		const shouldMeasureTiming = !this.isReadingTiming && (this.frame - this.lastTimingFrame) > 0;
 
 		const passEncoder = commandEncoder.beginRenderPass({
 			colorAttachments: [{

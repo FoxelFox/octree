@@ -3,6 +3,7 @@ import {Post} from "./pipeline/post";
 import {ContextUniform} from "./data/context";
 import {Noise} from "./pipeline/noise";
 import {Compact} from "./pipeline/compact";
+import {FrameGraph} from "./ui/FrameGraph";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -47,6 +48,19 @@ timingDiv.style.cssText = `
 	z-index: 1000;
 `;
 
+// --- Frame Graph ---
+const frameGraph = new FrameGraph();
+const frameGraphContainer = document.createElement('div');
+frameGraphContainer.style.cssText = `
+	position: fixed;
+	top: 10px;
+	right: 10px;
+	z-index: 1000;
+	pointer-events: auto;
+`;
+frameGraphContainer.appendChild(frameGraph.getElement());
+document.body.appendChild(frameGraphContainer);
+
 async function runOneTimeSetup() {
 	gpu.update();
 
@@ -76,6 +90,8 @@ loop();
 document.getElementsByTagName('canvas')[0].setAttribute('style', 'position: fixed;')
 
 function loop() {
+	const frameStart = performance.now();
+	
 	gpu.update();
 
 	for (const uniform of uniforms) {
@@ -88,13 +104,24 @@ function loop() {
 
 	post.afterUpdate();
 
+	// Calculate CPU frame time (excludes GPU work)
+	const frameEnd = performance.now();
+	const cpuFrameTime = frameEnd - frameStart;
+	
+	// Update frame graph with GPU render time
+	frameGraph.addFrameTime(post.renderTime);
+	frameGraph.render();
+
 	// Update timing display
+	const stats = frameGraph.getCurrentStats();
 	timingDiv.innerHTML = `
         <b>One-Time Setup</b><br>
 		Octree Gen: ${noise.octreeTime.toFixed(3)} ms<br>
 		Octree Compact: ${compact.compactTime.toFixed(3)} ms<br><br>
         <b>Per Frame</b><br>
-		Render: ${post.renderTime.toFixed(3)} ms
+		GPU Render: ${post.renderTime.toFixed(3)} ms<br>
+		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
+		FPS: ${stats ? stats.fps.toFixed(1) : '0.0'}
 	`;
 
 	requestAnimationFrame(loop);

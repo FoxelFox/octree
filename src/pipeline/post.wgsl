@@ -7,7 +7,7 @@ struct CompactNode {
 
 const LEAF_BIT: u32 = 0x80000000u;
 const INVALID_INDEX: u32 = 0xFFFFFFFFu;
-const MAX_STACK: u32 = 24u; // must be >= context.max_depth + a small margin
+const MAX_STACK: u32 = 21u; // must be >= context.max_depth + a small margin
 const MAX_INTERSECTION_TESTS: u32 = 384; // maximum ray-AABB tests before early termination
 
 @group(0) @binding(0) var <uniform> context: Context;
@@ -218,6 +218,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
     var stack: array<StackEntry, MAX_STACK>;
     var sp: u32 = 0u;
+    var intersection_tests: u32 = 1u; // Count the root intersection test
 
     // Push the root node onto the stack.
     stack[0] = StackEntry(0u, max(root_tt.x, 0.0), root_min, gs_f);
@@ -226,7 +227,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
     var child_octant_list: array<u32, 8>;
     var child_t_list: array<f32, 8>;
 
-    while (sp > 0u) {
+    while (sp > 0u && intersection_tests < MAX_INTERSECTION_TESTS) {
         sp = sp - 1u;
         let entry = stack[sp];
         result.steps = result.steps + 1u;
@@ -266,6 +267,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
                 let cmin = child_min_from_parent(entry.min, entry.size, oct);
                 let cmax = cmin + vec3<f32>(child_size);
                 let tt = ray_aabb_intersect(ray_origin, ray_dir, cmin, cmax);
+                intersection_tests = intersection_tests + 1u;
 
                 if (tt.x <= tt.y && tt.y >= entry.t_entry) {
                     child_octant_list[child_count] = oct;
@@ -463,7 +465,7 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
       // --- 1. DEFINE LIGHTING PROPERTIES ---
       let light_pos = vec3<f32>(f32(context.grid_size) * 0.8, f32(context.grid_size) * 1.2, f32(context.grid_size) * 0.3);
       let light_dir = normalize(light_pos - hit.pos);
-      let object_color = vec3<f32>(0.95, 0.95, 0.90); // Alpina white color
+      let object_color = vec3<f32>(1.0, 1.0, 1.0); // White color
       
       // Sky light properties - use background color
       let sky_color = abs(ray_dir) * 0.5 + 0.5; // Same as background
