@@ -1,6 +1,7 @@
 import {device, context, canvas, contextUniform} from "../index";
 import {Compact} from "./compact";
 import {BlueNoise} from "./bluenoise";
+import {DistanceField} from "./distance_field";
 import shader from "./post.wgsl" with {type: "text"};
 
 export class Post {
@@ -9,6 +10,7 @@ export class Post {
 	uniformBindGroup: GPUBindGroup;
 	compact: Compact;
 	blueNoise: BlueNoise;
+	distanceField: DistanceField;
 
 	frameBuffers: GPUTexture[] = [];
 	worldPosBuffers: GPUTexture[] = [];
@@ -37,6 +39,11 @@ export class Post {
 				},
 				{
 					binding: 1,
+					visibility: GPUShaderStage.FRAGMENT,
+					buffer: { type: 'read-only-storage' }
+				},
+				{
+					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
 					buffer: { type: 'read-only-storage' }
 				}
@@ -136,6 +143,10 @@ export class Post {
 			throw new Error('Compact must be set before calling init()');
 		}
 
+		if (!this.distanceField) {
+			throw new Error('DistanceField must be set before calling init()');
+		}
+
 		this.uniformBindGroup = device.createBindGroup({
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
@@ -146,6 +157,10 @@ export class Post {
 				{
 					binding: 1,
 					resource: {buffer: this.compact.compactNodesBuffer}
+				},
+				{
+					binding: 2,
+					resource: {buffer: this.distanceField.getDistanceFieldBuffer()}
 				}
 			]
 		});

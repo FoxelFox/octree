@@ -1,4 +1,5 @@
 import {canvas, device, gridSize, maxDepth, mouse, camera, time, renderMode} from "../index";
+import {taaToggleState} from "../gpu";
 import {mat4, vec3} from "wgpu-matrix";
 
 export class ContextUniform {
@@ -15,7 +16,11 @@ export class ContextUniform {
 		1   + // frame count
 		1   + // render mode
 		1   + // random seed
-		4     // padding to reach 416 bytes (104 floats * 4 bytes = 416)
+		1   + // sdf_epsilon
+		1   + // sdf_max_steps
+		1   + // sdf_over_relaxation
+		1   + // taa_enabled
+		4     // padding to reach 432 bytes (108 floats * 4 bytes = 432)
 
 	);
 	uniformBuffer: GPUBuffer;
@@ -115,8 +120,16 @@ export class ContextUniform {
 		// Store random seed for per-frame noise
 		this.uniformArray[o++] = Math.random() * 1000.0;
 		
-		// Add padding to reach required buffer size
-		o += 3;
+		// Store distance field parameters
+		this.uniformArray[o++] = 0.01; // sdf_epsilon (increased for stability)
+		integer[o++] = 128; // sdf_max_steps (optimized for performance)
+		this.uniformArray[o++] = 1.0; // sdf_over_relaxation (full stepping)
+		
+		// Store TAA enabled state
+		integer[o++] = taaToggleState.enabled ? 1 : 0;
+		
+		// Add padding to reach 432 bytes
+		o += 1;
 
 		// Calculate and store current view-projection for next frame (without jitter for motion vectors)
 		const currentViewProjection = mat4.multiply(perspective, view);

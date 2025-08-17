@@ -1,4 +1,7 @@
 
+// Global TAA state that can be modified
+export let taaToggleState = { enabled: true };
+
 export class GPUContext {
   device: GPUDevice;
   context: GPUCanvasContext;
@@ -28,6 +31,9 @@ export class GPUContext {
     modes: string[]
     lastLKeyPressed: boolean
   }
+  taaToggle: {
+    lastTKeyPressed: boolean
+  }
 
   constructor() {
     this.canvas = document.getElementsByTagName('canvas')[0];
@@ -45,8 +51,11 @@ export class GPUContext {
     this.time = {now: 0, delta: 0};
     this.renderMode = {
       current: 0,
-      modes: ['Normal', 'Heatmap'],
+      modes: ['Octree Normal', 'Octree Heatmap', 'SDF Normal', 'SDF Heatmap'],
       lastLKeyPressed: false
+    };
+    this.taaToggle = {
+      lastTKeyPressed: false
     };
 
     window.addEventListener("resize", this.setCanvasSize);
@@ -110,6 +119,7 @@ export class GPUContext {
     this.time.now = now;
     this.updateCamera();
     this.updateRenderMode();
+    this.updateTaaToggle();
   }
 
   setCanvasSize = () => {
@@ -198,5 +208,17 @@ export class GPUContext {
     }
     
     this.renderMode.lastLKeyPressed = lKeyPressed;
+  }
+
+  updateTaaToggle() {
+    const tKeyPressed = this.keys.has('keyt');
+    
+    // Toggle TAA when T key is pressed (edge detection)
+    if (tKeyPressed && !this.taaToggle.lastTKeyPressed) {
+      taaToggleState.enabled = !taaToggleState.enabled;
+      console.log(`TAA ${taaToggleState.enabled ? 'enabled' : 'disabled'}`);
+    }
+    
+    this.taaToggle.lastTKeyPressed = tKeyPressed;
   }
 }

@@ -5,13 +5,25 @@ struct CompactNode {
     childMask: u32,
 }
 
+struct DistanceNode {
+    distance: f32,
+    material_id: u32,
+}
+
 const LEAF_BIT: u32 = 0x80000000u;
 const INVALID_INDEX: u32 = 0xFFFFFFFFu;
 const MAX_STACK: u32 = 21u; // must be >= context.max_depth + a small margin
 const MAX_INTERSECTION_TESTS: u32 = 384; // maximum ray-AABB tests before early termination
 
+// Distance field constants
+const SDF_EPSILON: f32 = 0.001; // Surface detection threshold
+const SDF_MAX_STEPS: u32 = 256u; // Maximum raymarching steps (increased)
+const SDF_MAX_DISTANCE: f32 = 1000.0; // Maximum ray distance
+const SDF_OVER_RELAXATION: f32 = 0.8; // Step size multiplier for better precision
+
 @group(0) @binding(0) var <uniform> context: Context;
 @group(0) @binding(1) var<storage, read> nodes: array<CompactNode>;
+@group(0) @binding(2) var<storage, read> distance_field: array<DistanceNode>;
 @group(1) @binding(0) var prevFrameTexture: texture_2d<f32>;
 @group(1) @binding(1) var smpler: sampler;
 @group(1) @binding(2) var prevWorldPosTexture: texture_2d<f32>;
@@ -95,7 +107,16 @@ fn cast_shadow_ray(from_pos: vec3<f32>, to_pos: vec3<f32>, grid_size: u32) -> bo
     // Offset start position slightly along normal to avoid self-intersection
     let shadow_start = from_pos + shadow_dir * 0.001;
     
-    let shadow_hit = raycast_octree_stack(shadow_start, shadow_dir, grid_size);
+    var shadow_hit: RayCast;
+    
+    // Choose raycast method based on render mode
+    if (context.render_mode >= 2u) {
+        // Use distance field raymarching
+        shadow_hit = raycast_distance_field(shadow_start, shadow_dir);
+    } else {
+        // Use octree traversal
+        shadow_hit = raycast_octree_stack(shadow_start, shadow_dir, grid_size);
+    }
     
     // Check if we hit something before reaching the light
     if (shadow_hit.pos.x >= -0.001) {
@@ -182,8 +203,17 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
         let seed = base_seed + f32(i) * 9.234;
         let sky_dir = random_hemisphere_direction(seed, normal, pixel_uv);
         
-        // Cast ray towards sky - if it doesn't hit anything, we see sky
-        let sky_hit = raycast_octree_stack(hit_pos + normal * 0.001, sky_dir, grid_size);
+        var sky_hit: RayCast;
+        
+        // Choose raycast method based on render mode
+        if (context.render_mode >= 2u) {
+            // Use distance field raymarching
+            sky_hit = raycast_distance_field(hit_pos + normal * 0.001, sky_dir);
+        } else {
+            // Use octree traversal
+            sky_hit = raycast_octree_stack(hit_pos + normal * 0.001, sky_dir, grid_size);
+        }
+        
         if (sky_hit.pos.x < -0.001) {
             // Ray escaped to sky
             sky_factor += 1.0;
@@ -191,6 +221,114 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
     }
     
     return sky_factor / f32(samples);
+}
+
+// Trilinear interpolated distance field sampling for smooth results
+fn sample_distance_field(pos: vec3<f32>) -> f32 {
+    let gs_f = f32(context.grid_size);
+    
+    // Check if position is outside grid bounds
+    if (any(pos < vec3<f32>(0.0)) || any(pos >= vec3<f32>(gs_f - 1.0))) {
+        return 1.0; // Outside grid = empty space
+    }
+    
+    // Get the eight surrounding grid points for trilinear interpolation
+    let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.01));
+    let p0 = floor(grid_pos);
+    let p1 = p0 + vec3<f32>(1.0);
+    let t = grid_pos - p0;
+    
+    let gs = context.grid_size;
+    
+    // Sample the 8 corners of the cube
+    let i000 = u32(p0.z) * gs * gs + u32(p0.y) * gs + u32(p0.x);
+    let i001 = u32(p0.z) * gs * gs + u32(p0.y) * gs + u32(p1.x);
+    let i010 = u32(p0.z) * gs * gs + u32(p1.y) * gs + u32(p0.x);
+    let i011 = u32(p0.z) * gs * gs + u32(p1.y) * gs + u32(p1.x);
+    let i100 = u32(p1.z) * gs * gs + u32(p0.y) * gs + u32(p0.x);
+    let i101 = u32(p1.z) * gs * gs + u32(p0.y) * gs + u32(p1.x);
+    let i110 = u32(p1.z) * gs * gs + u32(p1.y) * gs + u32(p0.x);
+    let i111 = u32(p1.z) * gs * gs + u32(p1.y) * gs + u32(p1.x);
+    
+    let d000 = distance_field[i000].distance;
+    let d001 = distance_field[i001].distance;
+    let d010 = distance_field[i010].distance;
+    let d011 = distance_field[i011].distance;
+    let d100 = distance_field[i100].distance;
+    let d101 = distance_field[i101].distance;
+    let d110 = distance_field[i110].distance;
+    let d111 = distance_field[i111].distance;
+    
+    // Trilinear interpolation
+    let d00 = mix(d000, d001, t.x);
+    let d01 = mix(d010, d011, t.x);
+    let d10 = mix(d100, d101, t.x);
+    let d11 = mix(d110, d111, t.x);
+    
+    let d0 = mix(d00, d01, t.y);
+    let d1 = mix(d10, d11, t.y);
+    
+    return mix(d0, d1, t.z);
+}
+
+// Calculate normal using central differences (gradient of distance field)
+fn calculate_sdf_normal(pos: vec3<f32>) -> vec3<f32> {
+    let h = 0.01; // Much smaller offset for smooth gradients
+    let dx = sample_distance_field(pos + vec3<f32>(h, 0.0, 0.0)) - sample_distance_field(pos - vec3<f32>(h, 0.0, 0.0));
+    let dy = sample_distance_field(pos + vec3<f32>(0.0, h, 0.0)) - sample_distance_field(pos - vec3<f32>(0.0, h, 0.0));
+    let dz = sample_distance_field(pos + vec3<f32>(0.0, 0.0, h)) - sample_distance_field(pos - vec3<f32>(0.0, 0.0, h));
+    return normalize(vec3<f32>(dx, dy, dz));
+}
+
+// Raymarching implementation for distance fields
+fn raycast_distance_field(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> RayCast {
+    var result: RayCast;
+    result.pos = vec3<f32>(-1.0);
+    result.data = 0u;
+    result.steps = 0u;
+    
+    var t = 0.0;
+    let epsilon = context.sdf_epsilon;
+    let max_steps = context.sdf_max_steps;
+    let over_relaxation = context.sdf_over_relaxation;
+    
+    var prev_dist = 1.0; // Initialize as outside
+    
+    for (var i: u32 = 0u; i < max_steps; i++) {
+        let pos = ray_origin + ray_dir * t;
+        let dist = sample_distance_field(pos);
+        
+        result.steps = i;
+        
+        // Check for transition from empty to solid (front surface)
+        if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
+            result.pos = pos;
+            
+            // Use distance field gradient for smooth normals
+            result.normal = calculate_sdf_normal(pos);
+            
+            let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
+            let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));
+            let gs = context.grid_size;
+            let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
+            
+            result.data = distance_field[index].material_id;
+            
+            return result;
+        }
+        
+        // Adaptive stepping: use distance as step size with much smaller minimum step
+        let step_size = max(abs(dist) * over_relaxation, 0.01);
+        t += step_size;
+        prev_dist = dist;
+        
+        // Early termination if we've gone too far
+        if (t > SDF_MAX_DISTANCE) {
+            break;
+        }
+    }
+    
+    return result;
 }
 
 struct StackEntry {
@@ -453,8 +591,15 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   // Create ray direction
   let ray_dir = normalize(world_pos.xyz - camera_pos);
 
-  // Raycast through octree (world coords in [0, grid_size])
-  let hit = raycast_octree_stack(camera_pos, ray_dir, context.grid_size);
+  // Raycast through octree or distance field based on render mode
+  var hit: RayCast;
+  if (context.render_mode >= 2u) {
+    // Use distance field raymarching (modes 2 and 3)
+    hit = raycast_distance_field(camera_pos, ray_dir);
+  } else {
+    // Use octree traversal (modes 0 and 1)
+    hit = raycast_octree_stack(camera_pos, ray_dir, context.grid_size);
+  }
 
   var color: vec4<f32>;
   if (hit.pos.x >= -0.001) {
@@ -527,8 +672,8 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
 //	color = vec4<f32>(hit.normal * 0.5 + 0.5, 1);
 //  }
 
-  // TAA Implementation - pass the world position from our raycast
-  let history_color = taa_sample_history(uv, color, hit.pos, camera_pos, ray_dir);
+  // TAA Implementation - pass the world position from our raycast (only if enabled)
+  let final_color = select(color, taa_sample_history(uv, color, hit.pos, camera_pos, ray_dir), context.taa_enabled != 0u);
   
   // Generate heatmap color based on step count
   let max_expected_steps = 48u;  // Lower value for more visible heatmap differences
@@ -537,13 +682,13 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   var output: FragmentOutput;
   
   // Choose output based on render mode
-  if (context.render_mode == 0u) {
-    // Normal rendering mode
-    output.colorForTexture = history_color;
-    output.colorForCanvas = history_color;
+  if (context.render_mode == 0u || context.render_mode == 2u) {
+    // Normal rendering mode (octree or SDF)
+    output.colorForTexture = final_color;
+    output.colorForCanvas = final_color;
     output.heatmap = vec4(0.0, 0.0, 0.0, 1.0); // Black heatmap when not in heatmap mode
   } else {
-    // Heatmap rendering mode
+    // Heatmap rendering mode (octree or SDF)
     let heatmap_output = vec4(heatmap_color, 1.0);
     output.colorForTexture = heatmap_output;
     output.colorForCanvas = heatmap_output;
