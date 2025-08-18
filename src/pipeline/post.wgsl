@@ -110,7 +110,10 @@ fn cast_shadow_ray(from_pos: vec3<f32>, to_pos: vec3<f32>, grid_size: u32) -> bo
     var shadow_hit: RayCast;
     
     // Choose raycast method based on render mode
-    if (context.render_mode >= 2u) {
+    if (context.render_mode >= 4u) {
+        // Use hybrid raymarching
+        shadow_hit = raycast_hybrid(shadow_start, shadow_dir, grid_size);
+    } else if (context.render_mode >= 2u) {
         // Use distance field raymarching
         shadow_hit = raycast_distance_field(shadow_start, shadow_dir);
     } else {
@@ -206,7 +209,10 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
         var sky_hit: RayCast;
         
         // Choose raycast method based on render mode
-        if (context.render_mode >= 2u) {
+        if (context.render_mode >= 4u) {
+            // Use hybrid raymarching
+            sky_hit = raycast_hybrid(hit_pos + normal * 0.001, sky_dir, grid_size);
+        } else if (context.render_mode >= 2u) {
             // Use distance field raymarching
             sky_hit = raycast_distance_field(hit_pos + normal * 0.001, sky_dir);
         } else {
@@ -223,61 +229,42 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
     return sky_factor / f32(samples);
 }
 
-// Trilinear interpolated distance field sampling for smooth results
+// Nearest-neighbor distance field sampling for hard voxel edges
 fn sample_distance_field(pos: vec3<f32>) -> f32 {
     let gs_f = f32(context.grid_size);
     
     // Check if position is outside grid bounds
-    if (any(pos < vec3<f32>(0.0)) || any(pos >= vec3<f32>(gs_f - 1.0))) {
+    if (any(pos < vec3<f32>(0.0)) || any(pos >= vec3<f32>(gs_f))) {
         return 1.0; // Outside grid = empty space
     }
     
-    // Get the eight surrounding grid points for trilinear interpolation
-    let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.01));
-    let p0 = floor(grid_pos);
-    let p1 = p0 + vec3<f32>(1.0);
-    let t = grid_pos - p0;
+    // Use nearest neighbor sampling (no interpolation)
+    let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+    let nearest_pos = round(grid_pos);
     
     let gs = context.grid_size;
+    let index = u32(nearest_pos.z) * gs * gs + u32(nearest_pos.y) * gs + u32(nearest_pos.x);
     
-    // Sample the 8 corners of the cube
-    let i000 = u32(p0.z) * gs * gs + u32(p0.y) * gs + u32(p0.x);
-    let i001 = u32(p0.z) * gs * gs + u32(p0.y) * gs + u32(p1.x);
-    let i010 = u32(p0.z) * gs * gs + u32(p1.y) * gs + u32(p0.x);
-    let i011 = u32(p0.z) * gs * gs + u32(p1.y) * gs + u32(p1.x);
-    let i100 = u32(p1.z) * gs * gs + u32(p0.y) * gs + u32(p0.x);
-    let i101 = u32(p1.z) * gs * gs + u32(p0.y) * gs + u32(p1.x);
-    let i110 = u32(p1.z) * gs * gs + u32(p1.y) * gs + u32(p0.x);
-    let i111 = u32(p1.z) * gs * gs + u32(p1.y) * gs + u32(p1.x);
-    
-    let d000 = distance_field[i000].distance;
-    let d001 = distance_field[i001].distance;
-    let d010 = distance_field[i010].distance;
-    let d011 = distance_field[i011].distance;
-    let d100 = distance_field[i100].distance;
-    let d101 = distance_field[i101].distance;
-    let d110 = distance_field[i110].distance;
-    let d111 = distance_field[i111].distance;
-    
-    // Trilinear interpolation
-    let d00 = mix(d000, d001, t.x);
-    let d01 = mix(d010, d011, t.x);
-    let d10 = mix(d100, d101, t.x);
-    let d11 = mix(d110, d111, t.x);
-    
-    let d0 = mix(d00, d01, t.y);
-    let d1 = mix(d10, d11, t.y);
-    
-    return mix(d0, d1, t.z);
+    return distance_field[index].distance;
 }
 
-// Calculate normal using central differences (gradient of distance field)
-fn calculate_sdf_normal(pos: vec3<f32>) -> vec3<f32> {
-    let h = 0.01; // Much smaller offset for smooth gradients
-    let dx = sample_distance_field(pos + vec3<f32>(h, 0.0, 0.0)) - sample_distance_field(pos - vec3<f32>(h, 0.0, 0.0));
-    let dy = sample_distance_field(pos + vec3<f32>(0.0, h, 0.0)) - sample_distance_field(pos - vec3<f32>(0.0, h, 0.0));
-    let dz = sample_distance_field(pos + vec3<f32>(0.0, 0.0, h)) - sample_distance_field(pos - vec3<f32>(0.0, 0.0, h));
-    return normalize(vec3<f32>(dx, dy, dz));
+// Calculate hard voxel face normal (axis-aligned)
+fn calculate_voxel_normal(pos: vec3<f32>) -> vec3<f32> {
+    let gs_f = f32(context.grid_size);
+    let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+    let voxel_center = round(grid_pos);
+    
+    // Get the offset from voxel center to determine which face we hit
+    let offset = pos - voxel_center;
+    let abs_offset = abs(offset);
+    
+    // Determine which axis has the maximum offset (which face we're closest to)
+    let is_x = f32(abs_offset.x >= abs_offset.y && abs_offset.x >= abs_offset.z);
+    let is_y = f32(abs_offset.y >= abs_offset.x && abs_offset.y >= abs_offset.z);
+    let is_z = 1.0 - is_x - is_y;
+    
+    // Return the face normal in the direction of the offset
+    return sign(offset) * vec3<f32>(is_x, is_y, is_z);
 }
 
 // Raymarching implementation for distance fields
@@ -304,8 +291,8 @@ fn raycast_distance_field(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> RayCast 
         if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
             result.pos = pos;
             
-            // Use distance field gradient for smooth normals
-            result.normal = calculate_sdf_normal(pos);
+            // Use hard voxel face normals
+            result.normal = calculate_voxel_normal(pos);
             
             let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
             let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));
@@ -337,6 +324,136 @@ struct StackEntry {
     min: vec3<f32>,
     size: f32,
 };
+
+// Smart hybrid raycast: use SDF with octree-guided large steps
+fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
+    var result: RayCast;
+    result.pos = vec3<f32>(-1.0);
+    result.data = 0u;
+    result.steps = 0u;
+
+    let gs_f = f32(grid_size);
+    let root_min = vec3<f32>(0.0);
+    let root_max = vec3<f32>(gs_f);
+
+    // Check if ray hits the grid at all
+    let root_tt = ray_aabb_intersect(ray_origin, ray_dir, root_min, root_max);
+    if (root_tt.x > root_tt.y) {
+        return result;
+    }
+
+    var t = max(root_tt.x, 0.0);
+    let max_distance = min(root_tt.y, SDF_MAX_DISTANCE);
+    let max_steps = context.sdf_max_steps;
+    
+    // Start with large steps, reduce as we get closer to surfaces
+    var step_size = 4.0; // Start with 4-voxel steps
+    var prev_dist = 1.0;
+    
+    for (var i: u32 = 0u; i < max_steps; i++) {
+        let pos = ray_origin + ray_dir * t;
+        
+        // Early exit if outside bounds
+        if (any(pos < root_min) || any(pos >= root_max)) {
+            break;
+        }
+        
+        let dist = sample_distance_field(pos);
+        result.steps = i;
+        
+        // Surface detection
+        if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
+            result.pos = pos;
+            result.normal = calculate_voxel_normal(pos);
+            
+            let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+            let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(grid_size - 1u));
+            let gs = grid_size;
+            let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
+            
+            result.data = distance_field[index].material_id;
+            return result;
+        }
+        
+        // Adaptive step sizing: large steps in empty space, small near surfaces
+        if (abs(dist) > 2.0) {
+            step_size = 4.0; // Large steps in empty space
+        } else if (abs(dist) > 1.0) {
+            step_size = 1.0; // Medium steps
+        } else {
+            step_size = 0.25; // Small steps near surfaces
+        }
+        
+        t += step_size;
+        prev_dist = dist;
+        
+        if (t > max_distance) {
+            break;
+        }
+    }
+    
+    return result;
+}
+
+// SDF raymarching constrained to a specific region (AABB)
+fn raycast_sdf_in_region(ray_origin: vec3<f32>, ray_dir: vec3<f32>, region_min: vec3<f32>, region_max: vec3<f32>) -> RayCast {
+    var result: RayCast;
+    result.pos = vec3<f32>(-1.0);
+    result.data = 0u;
+    result.steps = 0u;
+
+    // Find intersection with the region
+    let region_tt = ray_aabb_intersect(ray_origin, ray_dir, region_min, region_max);
+    if (region_tt.x > region_tt.y) {
+        return result;
+    }
+
+    var t = max(region_tt.x, 0.0);
+    let t_max = region_tt.y;
+    let epsilon = context.sdf_epsilon;
+    let max_steps = min(context.sdf_max_steps / 8u, 32u); // Much fewer steps since we're in a small region
+    let over_relaxation = context.sdf_over_relaxation;
+    
+    var prev_dist = 1.0;
+    
+    for (var i: u32 = 0u; i < max_steps; i++) {
+        let pos = ray_origin + ray_dir * t;
+        
+        // Early exit if we've left the region
+        if (any(pos < region_min) || any(pos >= region_max)) {
+            break;
+        }
+        
+        let dist = sample_distance_field(pos);
+        result.steps = i;
+        
+        // Surface detection: transition from empty to solid
+        if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
+            result.pos = pos;
+            result.normal = calculate_voxel_normal(pos);
+            
+            let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
+            let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));
+            let gs = context.grid_size;
+            let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
+            
+            result.data = distance_field[index].material_id;
+            return result;
+        }
+        
+        // Adaptive stepping with region bounds
+        let step_size = max(abs(dist) * over_relaxation, 0.005);
+        t += step_size;
+        prev_dist = dist;
+        
+        // Exit if we've reached the end of the region
+        if (t > t_max) {
+            break;
+        }
+    }
+    
+    return result;
+}
 
 // A corrected and optimized stack-based raycast implementation.
 fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
@@ -591,9 +708,12 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   // Create ray direction
   let ray_dir = normalize(world_pos.xyz - camera_pos);
 
-  // Raycast through octree or distance field based on render mode
+  // Raycast through octree, distance field, or hybrid based on render mode
   var hit: RayCast;
-  if (context.render_mode >= 2u) {
+  if (context.render_mode >= 4u) {
+    // Use hybrid raymarching (modes 4 and 5)
+    hit = raycast_hybrid(camera_pos, ray_dir, context.grid_size);
+  } else if (context.render_mode >= 2u) {
     // Use distance field raymarching (modes 2 and 3)
     hit = raycast_distance_field(camera_pos, ray_dir);
   } else {
@@ -682,13 +802,13 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   var output: FragmentOutput;
   
   // Choose output based on render mode
-  if (context.render_mode == 0u || context.render_mode == 2u) {
-    // Normal rendering mode (octree or SDF)
+  if (context.render_mode == 0u || context.render_mode == 2u || context.render_mode == 4u) {
+    // Normal rendering mode (octree, SDF, or hybrid)
     output.colorForTexture = final_color;
     output.colorForCanvas = final_color;
     output.heatmap = vec4(0.0, 0.0, 0.0, 1.0); // Black heatmap when not in heatmap mode
   } else {
-    // Heatmap rendering mode (octree or SDF)
+    // Heatmap rendering mode (octree, SDF, or hybrid)
     let heatmap_output = vec4(heatmap_color, 1.0);
     output.colorForTexture = heatmap_output;
     output.colorForCanvas = heatmap_output;

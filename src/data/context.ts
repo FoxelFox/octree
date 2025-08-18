@@ -20,7 +20,8 @@ export class ContextUniform {
 		1   + // sdf_max_steps
 		1   + // sdf_over_relaxation
 		1   + // taa_enabled
-		4     // padding to reach 432 bytes (108 floats * 4 bytes = 432)
+		1   + // hybrid_threshold
+		3     // padding to reach 432 bytes (108 floats * 4 bytes = 432)
 
 	);
 	uniformBuffer: GPUBuffer;
@@ -128,7 +129,11 @@ export class ContextUniform {
 		// Store TAA enabled state
 		integer[o++] = taaToggleState.enabled ? 1 : 0;
 		
+		// Store hybrid threshold
+		this.uniformArray[o++] = 1.0; // hybrid_threshold - switch to SDF when node size <= this value (smaller = less SDF usage)
+		
 		// Add padding to reach 432 bytes
+		o += 1;
 		o += 1;
 
 		// Calculate and store current view-projection for next frame (without jitter for motion vectors)

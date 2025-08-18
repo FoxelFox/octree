@@ -51,7 +51,7 @@ export class GPUContext {
     this.time = {now: 0, delta: 0};
     this.renderMode = {
       current: 0,
-      modes: ['Octree Normal', 'Octree Heatmap', 'SDF Normal', 'SDF Heatmap'],
+      modes: ['Octree Normal', 'Octree Heatmap', 'SDF Normal', 'SDF Heatmap', 'Hybrid Normal', 'Hybrid Heatmap'],
       lastLKeyPressed: false
     };
     this.taaToggle = {
