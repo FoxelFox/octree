@@ -1,14 +1,14 @@
-import {device, context, canvas, contextUniform} from "../index";
-import {Compact} from "./compact";
+import {canvas, context, contextUniform, device} from "../index";
 import {BlueNoise} from "./bluenoise";
 import {DistanceField} from "./distance_field";
 import shader from "./post.wgsl" with {type: "text"};
+import {Noise} from "./noise";
 
 export class Post {
 	pipeline: GPURenderPipeline;
 
 	uniformBindGroup: GPUBindGroup;
-	compact: Compact;
+	noise: Noise;
 	blueNoise: BlueNoise;
 	distanceField: DistanceField;
 
@@ -35,17 +35,17 @@ export class Post {
 				{
 					binding: 0,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-					buffer: { type: 'uniform' }
+					buffer: {type: 'uniform'}
 				},
 				{
 					binding: 1,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: { type: 'read-only-storage' }
+					buffer: {type: 'read-only-storage'}
 				},
 				{
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
-					buffer: { type: 'read-only-storage' }
+					buffer: {type: 'read-only-storage'}
 				}
 			]
 		});
@@ -55,7 +55,7 @@ export class Post {
 				{
 					binding: 0,
 					visibility: GPUShaderStage.FRAGMENT,
-					texture: { sampleType: 'float' }
+					texture: {sampleType: 'float'}
 				},
 				{
 					binding: 1,
@@ -65,12 +65,12 @@ export class Post {
 				{
 					binding: 2,
 					visibility: GPUShaderStage.FRAGMENT,
-					texture: { sampleType: 'unfilterable-float' }
+					texture: {sampleType: 'unfilterable-float'}
 				},
 				{
 					binding: 3,
 					visibility: GPUShaderStage.FRAGMENT,
-					texture: { sampleType: 'float' }
+					texture: {sampleType: 'float'}
 				}
 			]
 		});
@@ -139,8 +139,8 @@ export class Post {
 	}
 
 	init() {
-		if (!this.compact) {
-			throw new Error('Compact must be set before calling init()');
+		if (!this.noise) {
+			throw new Error('Noise must be set before calling init()');
 		}
 
 		if (!this.distanceField) {
@@ -156,7 +156,7 @@ export class Post {
 				},
 				{
 					binding: 1,
-					resource: {buffer: this.compact.compactNodesBuffer}
+					resource: {buffer: this.noise.nodesBuffer}
 				},
 				{
 					binding: 2,
@@ -225,14 +225,14 @@ export class Post {
 				const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
 				const startTime = times[0];
 				const endTime = times[1];
-				
+
 				// Only update if we have valid timestamps
 				if (startTime > 0n && endTime > 0n && endTime >= startTime) {
 					const duration = endTime - startTime;
 					this.renderTime = Number(duration) / 1_000_000; // Convert to milliseconds
 				}
 				// Keep previous renderTime value if timestamps are invalid
-				
+
 				this.queryReadbackBuffer.unmap();
 				this.isReadingTiming = false;
 			}).catch(() => {
@@ -263,7 +263,7 @@ export class Post {
 				format: navigator.gpu.getPreferredCanvasFormat(),
 				usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
 			}));
-			
+
 			this.worldPosBuffers.push(device.createTexture({
 				size: {width: canvas.width, height: canvas.height},
 				format: 'rgba32float',

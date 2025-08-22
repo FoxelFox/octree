@@ -1,8 +1,8 @@
 #import "../data/context.wgsl"
 
-struct CompactNode {
-    firstChildOrData: u32,
-    childMask: u32,
+struct Octree {
+    data: u32,
+    childs: array<u32, 8>
 }
 
 struct DistanceNode {
@@ -22,7 +22,7 @@ const SDF_MAX_DISTANCE: f32 = 1000.0; // Maximum ray distance
 const SDF_OVER_RELAXATION: f32 = 0.8; // Step size multiplier for better precision
 
 @group(0) @binding(0) var <uniform> context: Context;
-@group(0) @binding(1) var<storage, read> nodes: array<CompactNode>;
+@group(0) @binding(1) var<storage, read> nodes: array<Octree>;
 @group(0) @binding(2) var<storage, read> distance_field: array<DistanceNode>;
 @group(1) @binding(0) var prevFrameTexture: texture_2d<f32>;
 @group(1) @binding(1) var smpler: sampler;
@@ -488,10 +488,10 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
         result.steps = result.steps + 1u;
 
         let node = nodes[entry.node_index];
-        let is_leaf = (node.firstChildOrData & LEAF_BIT) != 0u;
-
-        if (is_leaf || entry.size <= 1.0) {
-            let data = node.firstChildOrData & ~LEAF_BIT;
+        
+        // Check if this is a leaf or minimum size
+        if (entry.size <= 1.0) {
+            let data = node.data;
             if (data > 0u) {
                 let t_hit = max(entry.t_entry, 0.0);
                 result.pos = ray_origin + ray_dir * t_hit;
@@ -509,7 +509,14 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
             continue;
         }
 
-        let child_mask = node.childMask;
+        // Compute child mask from childs array
+        var child_mask = 0u;
+        for (var i = 0u; i < 8u; i++) {
+            if (node.childs[i] != INVALID_INDEX) {
+                child_mask |= (1u << i);
+            }
+        }
+        
         if (child_mask == 0u) {
             continue;
         }
@@ -555,8 +562,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 
             if (sp >= MAX_STACK) { return result; } // Stack overflow
 
-            let child_offset = countOneBits(child_mask & ((1u << octant) - 1u));
-            let child_node_index = node.firstChildOrData + child_offset;
+            let child_node_index = node.childs[octant];
             let cmin = child_min_from_parent(entry.min, entry.size, octant);
 
             stack[sp] = StackEntry(child_node_index, child_t_list[sorted_index], cmin, child_size);
