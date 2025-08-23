@@ -17,8 +17,8 @@ const MAX_INTERSECTION_TESTS: u32 = 384; // maximum ray-AABB tests before early 
 
 // Distance field constants
 const SDF_EPSILON: f32 = 0.001; // Surface detection threshold
-const SDF_MAX_STEPS: u32 = 256u; // Maximum raymarching steps (increased)
-const SDF_MAX_DISTANCE: f32 = 1000.0; // Maximum ray distance
+
+const SDF_MAX_DISTANCE: f32 = 100000.0; // Maximum ray distance
 const SDF_OVER_RELAXATION: f32 = 0.8; // Step size multiplier for better precision
 
 @group(0) @binding(0) var <uniform> context: Context;
@@ -229,16 +229,71 @@ fn calculate_sky_light(hit_pos: vec3<f32>, normal: vec3<f32>, grid_size: u32, sa
     return sky_factor / f32(samples);
 }
 
-// Nearest-neighbor distance field sampling for hard voxel edges
+// Trilinear interpolated distance field sampling for smooth surfaces
 fn sample_distance_field(pos: vec3<f32>) -> f32 {
     let gs_f = f32(context.grid_size);
     
-    // Check if position is outside grid bounds
-    if (any(pos < vec3<f32>(0.0)) || any(pos >= vec3<f32>(gs_f))) {
+    // Early bounds check with single comparison
+    let in_bounds = all(pos >= vec3<f32>(0.0)) && all(pos < vec3<f32>(gs_f - 1.0));
+    if (!in_bounds) {
         return 1.0; // Outside grid = empty space
     }
     
-    // Use nearest neighbor sampling (no interpolation)
+    // Get the grid position and fractional part for interpolation
+    let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.001));
+    let base_pos = floor(grid_pos);
+    let frac = grid_pos - base_pos;
+    
+    // Pre-calculate grid size and base index
+    let gs = context.grid_size;
+    let base_x = u32(base_pos.x);
+    let base_y = u32(base_pos.y); 
+    let base_z = u32(base_pos.z);
+    
+    // Sample 8 corner voxels for trilinear interpolation
+    // Organize as a 2x2x2 cube: [z][y][x]
+    let gs_sq = gs * gs;
+    let base_idx = base_z * gs_sq + base_y * gs + base_x;
+    
+    let d000 = distance_field[base_idx].distance;
+    let d001 = distance_field[base_idx + 1u].distance;
+    let d010 = distance_field[base_idx + gs].distance;
+    let d011 = distance_field[base_idx + gs + 1u].distance;
+    let d100 = distance_field[base_idx + gs_sq].distance;
+    let d101 = distance_field[base_idx + gs_sq + 1u].distance;
+    let d110 = distance_field[base_idx + gs_sq + gs].distance;
+    let d111 = distance_field[base_idx + gs_sq + gs + 1u].distance;
+    
+    // Trilinear interpolation
+    let fx = frac.x;
+    let fy = frac.y; 
+    let fz = frac.z;
+    
+    // Interpolate along X axis
+    let d00 = mix(d000, d001, fx);
+    let d01 = mix(d010, d011, fx);
+    let d10 = mix(d100, d101, fx);
+    let d11 = mix(d110, d111, fx);
+    
+    // Interpolate along Y axis
+    let d0 = mix(d00, d01, fy);
+    let d1 = mix(d10, d11, fy);
+    
+    // Interpolate along Z axis
+    return mix(d0, d1, fz);
+}
+
+// Nearest-neighbor distance field sampling (fast version for when quality isn't critical)
+fn sample_distance_field_nearest(pos: vec3<f32>) -> f32 {
+    let gs_f = f32(context.grid_size);
+    
+    // Fast bounds check
+    let in_bounds = all(pos >= vec3<f32>(0.0)) && all(pos < vec3<f32>(gs_f));
+    if (!in_bounds) {
+        return 1.0;
+    }
+    
+    // Nearest neighbor sampling
     let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
     let nearest_pos = round(grid_pos);
     
@@ -248,7 +303,55 @@ fn sample_distance_field(pos: vec3<f32>) -> f32 {
     return distance_field[index].distance;
 }
 
-// Calculate hard voxel face normal (axis-aligned)
+// Adaptive distance field sampling based on distance from camera and surface proximity
+fn sample_distance_field_adaptive(pos: vec3<f32>, camera_pos: vec3<f32>, surface_distance: f32) -> f32 {
+    let camera_distance = distance(pos, camera_pos);
+    
+    // Use higher quality sampling when close to camera or near surfaces
+    let use_high_quality = camera_distance < 20.0 || abs(surface_distance) < 2.0;
+    
+    return select(sample_distance_field_nearest(pos), sample_distance_field(pos), use_high_quality);
+}
+
+// Hierarchical distance field sampling - start coarse, refine near surface
+fn sample_distance_field_hierarchical(pos: vec3<f32>, target_precision: f32) -> f32 {
+    // Start with coarse sampling for distant areas
+    if (target_precision > 1.0) {
+        // Use nearest neighbor for distant sampling
+        return sample_distance_field_nearest(pos);
+    } else {
+        // Use full trilinear interpolation for precise sampling
+        return sample_distance_field(pos);
+    }
+}
+
+// Fast empty space detection using lower resolution sampling
+fn is_empty_region(pos: vec3<f32>, radius: f32) -> bool {
+    // Sample at reduced resolution to quickly check if region is empty
+    let coarse_dist = sample_distance_field_nearest(pos);
+    return coarse_dist > radius;
+}
+
+// Calculate smooth gradient-based normal using central differences
+fn calculate_gradient_normal(pos: vec3<f32>) -> vec3<f32> {
+    let epsilon = 0.1; // Small offset for finite differences
+    
+    // Sample distance field at offset positions to calculate gradient
+    let dx = sample_distance_field(pos + vec3<f32>(epsilon, 0.0, 0.0)) - 
+             sample_distance_field(pos - vec3<f32>(epsilon, 0.0, 0.0));
+    let dy = sample_distance_field(pos + vec3<f32>(0.0, epsilon, 0.0)) - 
+             sample_distance_field(pos - vec3<f32>(0.0, epsilon, 0.0));
+    let dz = sample_distance_field(pos + vec3<f32>(0.0, 0.0, epsilon)) - 
+             sample_distance_field(pos - vec3<f32>(0.0, 0.0, epsilon));
+    
+    let gradient = vec3<f32>(dx, dy, dz) / (2.0 * epsilon);
+    let gradient_length = length(gradient);
+    
+    // Return normalized gradient, fallback to up vector if gradient is too small
+    return select(vec3<f32>(0.0, 1.0, 0.0), gradient / gradient_length, gradient_length > 0.001);
+}
+
+// Calculate hard voxel face normal (axis-aligned) - kept for compatibility
 fn calculate_voxel_normal(pos: vec3<f32>) -> vec3<f32> {
     let gs_f = f32(context.grid_size);
     let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
@@ -267,7 +370,7 @@ fn calculate_voxel_normal(pos: vec3<f32>) -> vec3<f32> {
     return sign(offset) * vec3<f32>(is_x, is_y, is_z);
 }
 
-// Raymarching implementation for distance fields
+// Optimized raymarching with sphere tracing and binary search refinement
 fn raycast_distance_field(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> RayCast {
     var result: RayCast;
     result.pos = vec3<f32>(-1.0);
@@ -279,39 +382,174 @@ fn raycast_distance_field(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> RayCast 
     let max_steps = context.sdf_max_steps;
     let over_relaxation = context.sdf_over_relaxation;
     
-    var prev_dist = 1.0; // Initialize as outside
+    var prev_dist = 1.0;
+    var prev_t = 0.0;
     
+    // Phase 1: Sphere tracing with large steps
     for (var i: u32 = 0u; i < max_steps; i++) {
         let pos = ray_origin + ray_dir * t;
         let dist = sample_distance_field(pos);
         
         result.steps = i;
         
-        // Check for transition from empty to solid (front surface)
+        // Check for surface crossing
         if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
-            result.pos = pos;
+            // Phase 2: Binary search refinement for precise intersection
+            var t_near = prev_t;
+            var t_far = t;
+            var refined_pos = pos;
             
-            // Use hard voxel face normals
-            result.normal = calculate_voxel_normal(pos);
+            // Binary search for precise surface location (up to 6 iterations)
+            for (var j = 0u; j < 6u; j++) {
+                let t_mid = (t_near + t_far) * 0.5;
+                let mid_pos = ray_origin + ray_dir * t_mid;
+                let mid_dist = sample_distance_field(mid_pos);
+                
+                if (mid_dist >= 0.0) {
+                    t_near = t_mid;
+                } else {
+                    t_far = t_mid;
+                    refined_pos = mid_pos;
+                }
+                result.steps += 1u;
+            }
             
-            let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
+            result.pos = refined_pos;
+            result.normal = calculate_gradient_normal(refined_pos);
+            
+            let grid_pos = clamp(refined_pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
             let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));
             let gs = context.grid_size;
             let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
             
             result.data = distance_field[index].material_id;
-            
             return result;
         }
         
-        // Adaptive stepping: use distance as step size with much smaller minimum step
-        let step_size = max(abs(dist) * over_relaxation, 0.01);
+        // Sphere tracing: use distance as step size with safety factor
+        let abs_dist = abs(dist);
+        var step_size: f32;
+        
+        if (abs_dist > 2.0) {
+            // Large steps in empty space
+            step_size = abs_dist * over_relaxation;
+        } else if (abs_dist > 0.5) {
+            // Medium steps approaching surface
+            step_size = abs_dist * 0.5;
+        } else {
+            // Small steps near surface
+            step_size = 0.1;
+        }
+        
+        prev_t = t;
         t += step_size;
         prev_dist = dist;
         
-        // Early termination if we've gone too far
+        // Early termination
         if (t > SDF_MAX_DISTANCE) {
             break;
+        }
+    }
+    
+    return result;
+}
+
+// Ultra-optimized raymarching with all optimization techniques
+fn raycast_distance_field_optimized(ray_origin: vec3<f32>, ray_dir: vec3<f32>) -> RayCast {
+    var result: RayCast;
+    result.pos = vec3<f32>(-1.0);
+    result.data = 0u;
+    result.steps = 0u;
+    
+    var t = 0.0;
+    let max_steps = min(context.sdf_max_steps, 64u); // Reduced max steps
+    
+    var prev_dist = 1.0;
+    var prev_t = 0.0;
+    var step_size = 4.0; // Start with large steps
+    
+    // Phase 1: Coarse traversal with large steps
+    for (var i: u32 = 0u; i < max_steps; i++) {
+        let pos = ray_origin + ray_dir * t;
+        
+        // Early bounds check
+        if (any(pos < vec3<f32>(0.0)) || any(pos >= vec3<f32>(f32(context.grid_size)))) {
+            break;
+        }
+        
+        // Use hierarchical sampling based on step size
+        let dist = sample_distance_field_hierarchical(pos, step_size);
+        result.steps = i;
+        
+        // Surface crossing detection
+        if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
+            // Phase 2: Binary search refinement
+            var t_near = prev_t;
+            var t_far = t;
+            var refined_pos = pos;
+            
+            // Adaptive binary search iterations based on step size
+            let search_iterations = select(4u, 6u, step_size > 2.0);
+            
+            for (var j = 0u; j < search_iterations; j++) {
+                let t_mid = (t_near + t_far) * 0.5;
+                let mid_pos = ray_origin + ray_dir * t_mid;
+                let mid_dist = sample_distance_field(mid_pos); // Use full precision
+                
+                if (mid_dist >= 0.0) {
+                    t_near = t_mid;
+                } else {
+                    t_far = t_mid;
+                    refined_pos = mid_pos;
+                }
+                result.steps += 1u;
+            }
+            
+            result.pos = refined_pos;
+            result.normal = calculate_gradient_normal(refined_pos);
+            
+            let grid_pos = clamp(refined_pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
+            let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));
+            let gs = context.grid_size;
+            let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
+            
+            result.data = distance_field[index].material_id;
+            return result;
+        }
+        
+        // Optimized step sizing with safety constraints
+        let abs_dist = abs(dist);
+        
+        // Large steps in very empty space
+        if (abs_dist > 8.0) {
+            step_size = min(abs_dist * 0.9, 16.0);
+        }
+        // Medium steps in moderately empty space  
+        else if (abs_dist > 3.0) {
+            step_size = abs_dist * 0.7;
+        }
+        // Small steps approaching surface
+        else if (abs_dist > 1.0) {
+            step_size = abs_dist * 0.5;
+        }
+        // Very small steps near surface
+        else {
+            step_size = max(abs_dist * 0.3, 0.05);
+        }
+        
+        prev_t = t;
+        t += step_size;
+        prev_dist = dist;
+        
+        // Early termination for distant rays
+        if (t > SDF_MAX_DISTANCE) {
+            break;
+        }
+        
+        // Skip ahead in confirmed empty regions
+        if (abs_dist > 10.0 && is_empty_region(pos + ray_dir * abs_dist * 0.5, abs_dist * 0.3)) {
+            t += abs_dist * 0.5;
+            result.steps += 1u;
         }
     }
     
@@ -325,7 +563,7 @@ struct StackEntry {
     size: f32,
 };
 
-// Smart hybrid raycast: use SDF with octree-guided large steps
+// Enhanced hybrid raycast with adaptive sampling and smooth normals
 fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> RayCast {
     var result: RayCast;
     result.pos = vec3<f32>(-1.0);
@@ -361,6 +599,7 @@ fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> 
             break;
         }
         
+        // Use optimized sampling - avoid adaptive overhead in tight loops
         let dist = sample_distance_field(pos);
         result.steps = i;
         
@@ -369,42 +608,30 @@ fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> 
                          (i > 0u && prev_dist < 0.0 && dist >= 0.0);      // Inside to outside (back face)
         
         if (surface_hit) {
-            // Determine if this is a front face (outside→inside) or back face (inside→outside)
-            let is_front_face = prev_dist >= 0.0 && dist < 0.0;
+            // Binary search refinement for precise surface location
+            var t_near = t - step_size;
+            var t_far = t;
+            var refined_pos = pos;
             
-            // For front faces, use current position; for back faces, use previous position
-            let surface_pos = select(ray_origin + ray_dir * (t - step_size), pos, is_front_face);
-            let grid_pos = clamp(surface_pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
-            let voxel_center = round(grid_pos);
-            
-            // Compute voxel AABB bounds
-            let voxel_min = voxel_center - vec3<f32>(0.5);
-            let voxel_max = voxel_center + vec3<f32>(0.5);
-            
-            // Get precise intersection point using AABB intersection
-            let precise_t = ray_aabb_intersect(ray_origin, ray_dir, voxel_min, voxel_max);
-            
-            // Validate intersection and use fallback if invalid
-            if (precise_t.x <= precise_t.y && precise_t.y >= 0.0) {
-                // Use the entry point for front faces, exit point for back faces  
-                let intersection_t = select(precise_t.y, precise_t.x, is_front_face);
-                result.pos = ray_origin + ray_dir * intersection_t;
-            } else {
-                // Fallback to raymarching position if AABB intersection fails
-                result.pos = surface_pos;
+            // 4 iterations for hybrid (fewer than pure SDF since we start closer)
+            for (var j = 0u; j < 4u; j++) {
+                let t_mid = (t_near + t_far) * 0.5;
+                let mid_pos = ray_origin + ray_dir * t_mid;
+                let mid_dist = sample_distance_field(mid_pos);
+                
+                if (mid_dist >= 0.0) {
+                    t_near = t_mid;
+                } else {
+                    t_far = t_mid;
+                    refined_pos = mid_pos;
+                }
+                result.steps += 1u;
             }
             
-            // Calculate precise normal based on which face was hit
-            let hit_point = result.pos - voxel_center;
-            let abs_hit = abs(hit_point);
-            let is_x = f32(abs_hit.x >= abs_hit.y && abs_hit.x >= abs_hit.z);
-            let is_y = f32(abs_hit.y >= abs_hit.x && abs_hit.y >= abs_hit.z);
-            let is_z = 1.0 - is_x - is_y;
-            var face_normal = sign(hit_point) * vec3<f32>(is_x, is_y, is_z);
-            
-            // For back faces, flip the normal to point outward from the surface
-            result.normal = select(-face_normal, face_normal, is_front_face);
-            
+            let grid_pos = clamp(refined_pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+            result.pos = refined_pos;
+            result.normal = calculate_gradient_normal(refined_pos);
+
             let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(grid_size - 1u));
             let gs = grid_size;
             let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
@@ -413,13 +640,16 @@ fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> 
             return result;
         }
         
-        // Adaptive step sizing: large steps in empty space, small near surfaces
-        if (abs(dist) > 2.0) {
-            step_size = 4.0; // Large steps in empty space
-        } else if (abs(dist) > 1.0) {
-            step_size = 1.0; // Medium steps
+        // Optimized step sizing using distance field values
+        let abs_dist = abs(dist);
+        if (abs_dist > 3.0) {
+            step_size = min(abs_dist * 0.8, 8.0); // Large steps, capped for safety
+        } else if (abs_dist > 1.5) {
+            step_size = abs_dist * 0.6; // Medium steps
+        } else if (abs_dist > 0.5) {
+            step_size = abs_dist * 0.4; // Smaller steps approaching surface
         } else {
-            step_size = 0.25; // Small steps near surfaces
+            step_size = 0.1; // Very small steps near surface
         }
         
         t += step_size;
@@ -468,7 +698,7 @@ fn raycast_sdf_in_region(ray_origin: vec3<f32>, ray_dir: vec3<f32>, region_min: 
         // Surface detection: transition from empty to solid
         if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
             result.pos = pos;
-            result.normal = calculate_voxel_normal(pos);
+            result.normal = calculate_gradient_normal(pos);
             
             let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(f32(context.grid_size) - 1.0));
             let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(context.grid_size - 1u));

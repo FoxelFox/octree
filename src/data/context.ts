@@ -123,7 +123,7 @@ export class ContextUniform {
 
 		// Store distance field parameters
 		this.uniformArray[o++] = 0.01; // sdf_epsilon (increased for stability)
-		integer[o++] = 128; // sdf_max_steps (optimized for performance)
+		integer[o++] = 256; // sdf_max_steps (optimized for performance)
 		this.uniformArray[o++] = 1.0; // sdf_over_relaxation (full stepping)
 
 		// Store TAA enabled state

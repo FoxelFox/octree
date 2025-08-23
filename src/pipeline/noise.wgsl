@@ -11,8 +11,8 @@ const INVALID_INDEX: u32 = 0xFFFFFFFFu; // Changed from 0u to avoid collision wi
 // input
 @group(1) @binding(0) var<uniform> context: Context;
 
-// output
-@group(0) @binding(0) var<storage, read_write> noise: array<u32>;
+// output - changed to store floating point SDF values
+@group(0) @binding(0) var<storage, read_write> noise: array<f32>;
 @group(0) @binding(1) var<storage, read_write> node_counter: atomic<u32>;
 @group(0) @binding(2) var<storage, read_write> nodes: array<Octree>;
 
@@ -86,14 +86,23 @@ fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
     return result_index;
 }
 
+// Generate continuous SDF values instead of binary 0/1
+fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
+    // Generate deterministic noise that doesn't depend on time for TAA stability
+    let noise_value = noise3(vec3<f32>(pos) / 10.0);
+    
+    // Convert noise from [0,1] range to SDF values
+    // Values > 0.5 become negative (inside), values < 0.5 become positive (outside)
+    let threshold = 0.5;
+    let sdf_range = 2.0; // Maximum distance value
+    
+    return (threshold - noise_value) * sdf_range;
+}
+
+// Legacy function to maintain compatibility with octree generation
 fn generate_noise(pos: vec3<u32>) -> u32 {
-	// Generate deterministic noise that doesn't depend on time for TAA stability
-	let random_value = noise3(vec3<f32>(pos) / 20.0);
-	if (random_value > 0.5) {
-		return 1u;
-	} else {
-		return 0u;
-	}
+    let sdf_value = generate_sdf_noise(pos);
+    return select(0u, 1u, sdf_value < 0.0);
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -113,9 +122,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Ensure root initialization completes before other threads proceed
     workgroupBarrier();
 
-    // Noise Generation
-    let zero_or_one = generate_noise(id);
-    noise[to1D(id)] = zero_or_one;
+    // Generate continuous SDF values
+    let sdf_value = generate_sdf_noise(id);
+    noise[to1D(id)] = sdf_value;
+    
+    // Generate binary value for octree (for compatibility)
+    let zero_or_one = select(0u, 1u, sdf_value < 0.0);
 
     // Octree Generation
     if (zero_or_one == 1u) {
