@@ -348,7 +348,10 @@ fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> 
     
     // Start with large steps, reduce as we get closer to surfaces
     var step_size = 4.0; // Start with 4-voxel steps
-    var prev_dist = 1.0;
+    
+    // Sample initial distance to determine if we start inside or outside
+    let initial_pos = ray_origin + ray_dir * t;
+    var prev_dist = sample_distance_field(initial_pos);
     
     for (var i: u32 = 0u; i < max_steps; i++) {
         let pos = ray_origin + ray_dir * t;
@@ -361,12 +364,47 @@ fn raycast_hybrid(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u32) -> 
         let dist = sample_distance_field(pos);
         result.steps = i;
         
-        // Surface detection
-        if (i > 0u && prev_dist >= 0.0 && dist < 0.0) {
-            result.pos = pos;
-            result.normal = calculate_voxel_normal(pos);
+        // Surface detection: handle both outside→inside and inside→outside transitions
+        let surface_hit = (i > 0u && prev_dist >= 0.0 && dist < 0.0) ||  // Outside to inside (front face)
+                         (i > 0u && prev_dist < 0.0 && dist >= 0.0);      // Inside to outside (back face)
+        
+        if (surface_hit) {
+            // Determine if this is a front face (outside→inside) or back face (inside→outside)
+            let is_front_face = prev_dist >= 0.0 && dist < 0.0;
             
-            let grid_pos = clamp(pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+            // For front faces, use current position; for back faces, use previous position
+            let surface_pos = select(ray_origin + ray_dir * (t - step_size), pos, is_front_face);
+            let grid_pos = clamp(surface_pos, vec3<f32>(0.0), vec3<f32>(gs_f - 1.0));
+            let voxel_center = round(grid_pos);
+            
+            // Compute voxel AABB bounds
+            let voxel_min = voxel_center - vec3<f32>(0.5);
+            let voxel_max = voxel_center + vec3<f32>(0.5);
+            
+            // Get precise intersection point using AABB intersection
+            let precise_t = ray_aabb_intersect(ray_origin, ray_dir, voxel_min, voxel_max);
+            
+            // Validate intersection and use fallback if invalid
+            if (precise_t.x <= precise_t.y && precise_t.y >= 0.0) {
+                // Use the entry point for front faces, exit point for back faces  
+                let intersection_t = select(precise_t.y, precise_t.x, is_front_face);
+                result.pos = ray_origin + ray_dir * intersection_t;
+            } else {
+                // Fallback to raymarching position if AABB intersection fails
+                result.pos = surface_pos;
+            }
+            
+            // Calculate precise normal based on which face was hit
+            let hit_point = result.pos - voxel_center;
+            let abs_hit = abs(hit_point);
+            let is_x = f32(abs_hit.x >= abs_hit.y && abs_hit.x >= abs_hit.z);
+            let is_y = f32(abs_hit.y >= abs_hit.x && abs_hit.y >= abs_hit.z);
+            let is_z = 1.0 - is_x - is_y;
+            var face_normal = sign(hit_point) * vec3<f32>(is_x, is_y, is_z);
+            
+            // For back faces, flip the normal to point outward from the surface
+            result.normal = select(-face_normal, face_normal, is_front_face);
+            
             let grid_i = min(vec3<u32>(round(grid_pos)), vec3<u32>(grid_size - 1u));
             let gs = grid_size;
             let index = grid_i.z * gs * gs + grid_i.y * gs + grid_i.x;
