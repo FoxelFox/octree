@@ -1,32 +1,32 @@
-import {canvas, device, gridSize, maxDepth, mouse, camera, time, renderMode} from "../index";
+import {camera, canvas, device, gridSize, maxDepth, mouse, renderMode, time} from "../index";
 import {taaToggleState} from "../gpu";
-import {mat4, vec3} from "wgpu-matrix";
+import {mat4} from "wgpu-matrix";
 
 export class ContextUniform {
 	uniformArray: Float32Array = new Float32Array(
-		10  + // stuff
-		2   + // padding
-		4*4 + // view
-		4*4 + // inverse view
-		4*4 + // perspective
-		4*4 + // inverse perspective
-		4*4 + // prev view projection
-		2   + // jitter offset
-		3   + // camera velocity
-		1   + // frame count
-		1   + // render mode
-		1   + // random seed
-		1   + // sdf_epsilon
-		1   + // sdf_max_steps
-		1   + // sdf_over_relaxation
-		1   + // taa_enabled
-		1   + // hybrid_threshold
+		10 + // stuff
+		2 + // padding
+		4 * 4 + // view
+		4 * 4 + // inverse view
+		4 * 4 + // perspective
+		4 * 4 + // inverse perspective
+		4 * 4 + // prev view projection
+		2 + // jitter offset
+		3 + // camera velocity
+		1 + // frame count
+		1 + // render mode
+		1 + // random seed
+		1 + // sdf_epsilon
+		1 + // sdf_max_steps
+		1 + // sdf_over_relaxation
+		1 + // taa_enabled
+		1 + // hybrid_threshold
 		3     // padding to reach 432 bytes (108 floats * 4 bytes = 432)
 
 	);
 	uniformBuffer: GPUBuffer;
 	canvas = document.getElementsByTagName('canvas')[0];
-	
+
 	private prevViewProjection: Float32Array = new Float32Array(16);
 	private frameCount: number = 0;
 	private prevCameraPosition: Float32Array = new Float32Array(3);
@@ -74,13 +74,13 @@ export class ContextUniform {
 		const aspect = this.canvas.width / this.canvas.height;
 		const near = 0.1
 		const far = 1000
-		
+
 		// Create jittered projection matrix for TAA
 		const perspective = mat4.perspective(fov, aspect, near, far);
 		const jitteredPerspective = mat4.clone(perspective);
 		jitteredPerspective[8] += jitterX * 2.0; // Apply jitter to projection
 		jitteredPerspective[9] += jitterY * 2.0;
-		
+
 		this.uniformArray.set(jitteredPerspective, o);
 		o += 16;
 		this.uniformArray.set(mat4.inverse(jitteredPerspective), o);
@@ -105,7 +105,7 @@ export class ContextUniform {
 			cameraVelocity[1] = (currentCameraPosition[1] - this.prevCameraPosition[1]) / time.delta;
 			cameraVelocity[2] = (currentCameraPosition[2] - this.prevCameraPosition[2]) / time.delta;
 		}
-		
+
 		// Store camera velocity
 		this.uniformArray[o++] = cameraVelocity[0];
 		this.uniformArray[o++] = cameraVelocity[1];
@@ -114,24 +114,24 @@ export class ContextUniform {
 
 		// Store frame count
 		integer[o++] = this.frameCount;
-		
+
 		// Store render mode
 		integer[o++] = renderMode.current;
-		
+
 		// Store random seed for per-frame noise
 		this.uniformArray[o++] = Math.random() * 1000.0;
-		
+
 		// Store distance field parameters
 		this.uniformArray[o++] = 0.01; // sdf_epsilon (increased for stability)
 		integer[o++] = 128; // sdf_max_steps (optimized for performance)
 		this.uniformArray[o++] = 1.0; // sdf_over_relaxation (full stepping)
-		
+
 		// Store TAA enabled state
 		integer[o++] = taaToggleState.enabled ? 1 : 0;
-		
+
 		// Store hybrid threshold
 		this.uniformArray[o++] = 1.0; // hybrid_threshold - switch to SDF when node size <= this value (smaller = less SDF usage)
-		
+
 		// Add padding to reach 432 bytes
 		o += 1;
 		o += 1;
@@ -139,7 +139,7 @@ export class ContextUniform {
 		// Calculate and store current view-projection for next frame (without jitter for motion vectors)
 		const currentViewProjection = mat4.multiply(perspective, view);
 		this.prevViewProjection.set(currentViewProjection);
-		
+
 		// Store current camera position for next frame
 		this.prevCameraPosition.set(currentCameraPosition);
 
