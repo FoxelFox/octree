@@ -1,18 +1,15 @@
-import {Noise} from "./noise";
 import {context, contextUniform, device, gridSize} from "../index";
 import shader from "./block.wgsl" with {type: "text"};
+import {Mesh} from "./mesh";
 
 export class Block {
 
 	// input
-	noise: Noise;
+	mesh: Mesh;
 
 	pipeline: GPURenderPipeline
 	bindGroup: GPUBindGroup
 	uniformBindGroup: GPUBindGroup
-	indexBuffer: GPUBuffer
-	vertexBuffer: GPUBuffer
-
 	initialized: boolean;
 
 
@@ -21,11 +18,6 @@ export class Block {
 	}
 
 	update(commandEncoder: GPUCommandEncoder) {
-
-		if (!this.noise.result) {
-			console.log('no voxel currently')
-			return;
-		}
 
 		if (!this.initialized) {
 			this.init();
@@ -44,8 +36,11 @@ export class Block {
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.uniformBindGroup);
-		pass.setVertexBuffer(0, this.vertexBuffer);
-		pass.draw(this.vertexBuffer.size / 16, this.indexBuffer.size / 4);
+		
+		// Draw instances for each mesh chunk
+		const sSize = gridSize / 8;
+		const maxInstances = sSize * sSize * sSize;
+		pass.draw(1024 * 6, maxInstances); // Max vertices per mesh * max instances
 		pass.end();
 
 	}
@@ -55,35 +50,6 @@ export class Block {
 	}
 
 	init() {
-		const positions = []
-		for (let i = 0; i < this.noise.result.length; i++) {
-			if (this.noise.result[i] < 0.0) {
-				const [x, y, z] = this.to3D(i);
-				positions.push(...[x, y, z, 0]);
-			}
-		}
-
-		console.log(positions.length * 12, 'Polygons')
-
-		if (this.indexBuffer) {
-			this.indexBuffer.destroy();
-		}
-
-		this.indexBuffer = device.createBuffer({
-			label: 'Block Positions',
-			size: positions.length * 4,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-		});
-
-		const vertices = this.vertices;
-		this.vertexBuffer = device.createBuffer({
-			label: 'Block Vertices',
-			size: vertices.byteLength,
-			usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-		})
-
-		device.queue.writeBuffer(this.indexBuffer, 0, new Float32Array(positions));
-		device.queue.writeBuffer(this.vertexBuffer, 0, vertices);
 
 		this.pipeline = device.createRenderPipeline({
 			label: 'Block Indices',
@@ -101,16 +67,7 @@ export class Block {
 				module: device.createShaderModule({
 					label: 'Block Vertex Shader',
 					code: shader
-				}),
-				buffers: [{
-					arrayStride: 4 * 4,
-					attributes: [{
-						// vertex position
-						shaderLocation: 0,
-						format: "float32x4",
-						offset: 0
-					}]
-				}]
+				})
 			},
 			primitive: {
 				topology: 'triangle-list'
@@ -121,7 +78,7 @@ export class Block {
 			label: 'Block',
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
-				{binding: 0, resource: this.indexBuffer}
+				{binding: 0, resource: this.mesh.meshes}
 			]
 		});
 

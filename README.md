@@ -1,2 +1,6 @@
 # Octree Generation
-todo
+
+generate noise
+generate meshes
+generate list of meshes that actually needs to draw
+draw meshes
