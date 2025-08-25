@@ -15,24 +15,12 @@ export class Block {
 
 	initialized: boolean;
 
-	disabled: boolean = true;
-
 
 	constructor() {
-		document.addEventListener('keydown', ev => {
 
-			switch (ev.code) {
-				case 'Space': this.disabled = !this.disabled; break;
-			}
-
-		})
 	}
 
 	update(commandEncoder: GPUCommandEncoder) {
-
-		if (this.disabled) {
-			return;
-		}
 
 		if (!this.noise.result) {
 			console.log('no voxel currently')
@@ -69,9 +57,9 @@ export class Block {
 	init() {
 		const positions = []
 		for (let i = 0; i < this.noise.result.length; i++) {
-			if(this.noise.result[i] === 1) {
-				const [x,y,z] = this.to3D(i);
-				positions.push(...[x,y,z,0]);
+			if (this.noise.result[i] < 0.0) {
+				const [x, y, z] = this.to3D(i);
+				positions.push(...[x, y, z, 0]);
 			}
 		}
 

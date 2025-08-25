@@ -12,7 +12,7 @@ export class Noise {
 	noiseReadbackBuffer: GPUBuffer
 	nodesReadbackBuffer: GPUBuffer
 	isReading: boolean
-	
+
 	// timing
 	querySet: GPUQuerySet
 	queryBuffer: GPUBuffer
@@ -20,7 +20,7 @@ export class Noise {
 	octreeTime: number = 0
 
 	// output
-	result: Uint32Array;
+	result: Float32Array;
 	nodesResult: Uint32Array;
 
 	constructor() {
@@ -104,7 +104,7 @@ export class Noise {
 	update(commandEncoder: GPUCommandEncoder) {
 
 
-		if(this.result) {
+		if (this.result) {
 			return;
 		}
 
@@ -155,25 +155,25 @@ export class Noise {
 		}
 
 		this.isReading = true;
-		
+
 		// Read timing data
 		this.queryReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
 			const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
 			const startTime = times[0];
 			const endTime = times[1];
 			this.octreeTime = Number(endTime - startTime) / 1_000_000; // Convert to milliseconds
-			
+
 			console.log(`Octree generation time: ${this.octreeTime.toFixed(3)} ms`);
 			this.queryReadbackBuffer.unmap();
 		});
-		
+
 		this.noiseReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-			const mappedData = new Uint32Array(this.noiseReadbackBuffer.getMappedRange());
-			this.result = new Uint32Array(mappedData);
+			const mappedData = new Float32Array(this.noiseReadbackBuffer.getMappedRange());
+			this.result = new Float32Array(mappedData);
 
 			let ones = 0;
 			for (let i = 0; i < this.result.length; i++) {
-				if (this.result[i] == 1) {
+				if (this.result[i] < 0.0) {
 					ones++;
 				}
 			}
