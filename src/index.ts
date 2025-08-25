@@ -4,6 +4,12 @@ import {ContextUniform} from "./data/context";
 import {Noise} from "./pipeline/noise";
 import {DistanceField} from "./pipeline/distance_field";
 import {FrameGraph} from "./ui/FrameGraph";
+import {Block} from "./pipeline/block";
+
+enum PipelineMode {
+	Post,
+	Block
+}
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -19,16 +25,33 @@ export const camera = gpu.camera;
 export const time = gpu.time;
 export const renderMode = gpu.renderMode;
 export const contextUniform = new ContextUniform();
+export let pipelineMode = PipelineMode.Post;
 
 console.log('maxDepth:', maxDepth);
 console.log('gridSize:', gridSize);
 
 const uniforms = [contextUniform];
 
+document.addEventListener('keydown', ev => {
+
+	switch (ev.code) {
+		case 'KeyP':
+			pipelineMode++;
+			if (pipelineMode >= (Object.keys(PipelineMode).length - 1)) {
+				pipelineMode = 0;
+			}
+			break;
+	}
+
+})
+
+
 // --- Setup Pipelines ---
 const noise = new Noise();
 const distanceField = new DistanceField();
 const post = new Post();
+const block = new Block();
+block.noise = noise;
 post.noise = noise;
 post.distanceField = distanceField;
 
@@ -116,7 +139,17 @@ function loop() {
 	}
 
 	const updateEncoder = device.createCommandEncoder();
-	post.update(updateEncoder);
+
+	switch (pipelineMode) {
+		case PipelineMode.Post:
+			post.update(updateEncoder);
+			break;
+		case PipelineMode.Block:
+			block.update(updateEncoder);
+			break;
+	}
+
+
 	device.queue.submit([updateEncoder.finish()]);
 
 	post.afterUpdate();

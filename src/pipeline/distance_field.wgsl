@@ -89,55 +89,6 @@ fn calculate_distance(pos: vec3<u32>) -> f32 {
     }
 }
 
-// Smooth the SDF using trilinear interpolation of neighboring values
-fn smooth_sdf_value(pos: vec3<u32>) -> f32 {
-    let ipos = vec3<i32>(pos);
-    let center_value = get_sdf_value(ipos);
-    
-    // Sample neighboring values for smoothing
-    var sum = center_value * 8.0; // Center gets higher weight
-    var weight = 8.0;
-    
-    // Add 6-connected neighbors
-    let neighbors_6 = array<vec3<i32>, 6>(
-        vec3<i32>(-1, 0, 0), vec3<i32>(1, 0, 0),
-        vec3<i32>(0, -1, 0), vec3<i32>(0, 1, 0), 
-        vec3<i32>(0, 0, -1), vec3<i32>(0, 0, 1)
-    );
-    
-    for (var i = 0; i < 6; i++) {
-        let neighbor_val = get_sdf_value(ipos + neighbors_6[i]);
-        sum += neighbor_val * 4.0;
-        weight += 4.0;
-    }
-    
-    // Add 12 edge neighbors with lower weight
-    let neighbors_12 = array<vec3<i32>, 12>(
-        vec3<i32>(-1, -1, 0), vec3<i32>(-1, 1, 0), vec3<i32>(1, -1, 0), vec3<i32>(1, 1, 0),
-        vec3<i32>(-1, 0, -1), vec3<i32>(-1, 0, 1), vec3<i32>(1, 0, -1), vec3<i32>(1, 0, 1),
-        vec3<i32>(0, -1, -1), vec3<i32>(0, -1, 1), vec3<i32>(0, 1, -1), vec3<i32>(0, 1, 1)
-    );
-    
-    for (var i = 0; i < 12; i++) {
-        let neighbor_val = get_sdf_value(ipos + neighbors_12[i]);
-        sum += neighbor_val * 2.0;
-        weight += 2.0;
-    }
-    
-    // Add 8 corner neighbors with lowest weight
-    let neighbors_8 = array<vec3<i32>, 8>(
-        vec3<i32>(-1, -1, -1), vec3<i32>(-1, -1, 1), vec3<i32>(-1, 1, -1), vec3<i32>(-1, 1, 1),
-        vec3<i32>(1, -1, -1), vec3<i32>(1, -1, 1), vec3<i32>(1, 1, -1), vec3<i32>(1, 1, 1)
-    );
-    
-    for (var i = 0; i < 8; i++) {
-        let neighbor_val = get_sdf_value(ipos + neighbors_8[i]);
-        sum += neighbor_val * 1.0;
-        weight += 1.0;
-    }
-    
-    return sum / weight;
-}
 
 @compute @workgroup_size(4, 4, 4) 
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -147,12 +98,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     
     let index = to1D(id);
     
-    // Use the continuous SDF value directly with smoothing
-    let raw_distance = get_sdf_value(vec3<i32>(id));
-    let smoothed_distance = smooth_sdf_value(id);
-    
     // Blend between raw and smoothed for optimal quality
-    let distance = mix(raw_distance, smoothed_distance, 0.3);
+    let distance = get_sdf_value(vec3<i32>(id));
     
     // Material ID: 0 = empty space, 1 = solid material
     let material_id = select(0u, 1u, distance < 0.0);
