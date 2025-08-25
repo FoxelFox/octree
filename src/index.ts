@@ -5,6 +5,7 @@ import {Noise} from "./pipeline/noise";
 import {DistanceField} from "./pipeline/distance_field";
 import {FrameGraph} from "./ui/FrameGraph";
 import {Block} from "./pipeline/block";
+import {Mesh} from "./pipeline/mesh";
 
 enum PipelineMode {
 	Post,
@@ -51,7 +52,8 @@ const noise = new Noise();
 const distanceField = new DistanceField();
 const post = new Post();
 const block = new Block();
-block.noise = noise;
+const mesh = new Mesh();
+block.mesh = mesh;
 post.noise = noise;
 post.distanceField = distanceField;
 
@@ -95,6 +97,7 @@ async function runOneTimeSetup() {
 	console.log("Running one-time octree generation and compaction...");
 	const setupEncoder = device.createCommandEncoder();
 	noise.update(setupEncoder);
+
 	device.queue.submit([setupEncoder.finish()]);
 
 	// Explicitly wait for the GPU to finish all submitted work.
@@ -105,20 +108,18 @@ async function runOneTimeSetup() {
 
 	// Initialize distance field after noise pipeline
 	await distanceField.init(noise.noiseBuffer, contextUniform.uniformBuffer);
+	mesh.init(noise);
 
 	// Generate distance field from voxel data
 	console.log("Generating distance field...");
-	const distanceEncoder = device.createCommandEncoder();
-	const contextBindGroup = device.createBindGroup({
-		layout: distanceField.computePipeline.getBindGroupLayout(1),
-		entries: [{
-			binding: 0,
-			resource: {buffer: contextUniform.uniformBuffer}
-		}]
-	});
-	distanceField.update(distanceEncoder, contextBindGroup);
-	device.queue.submit([distanceEncoder.finish()]);
+	const encoder = device.createCommandEncoder();
+
+	distanceField.update(encoder);
+	mesh.update(encoder);
+	device.queue.submit([encoder.finish()]);
 	await device.queue.onSubmittedWorkDone();
+
+	await mesh.readback();
 
 	console.log("Setup complete.");
 }

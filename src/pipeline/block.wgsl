@@ -4,16 +4,28 @@ struct VertexOutput {
   @builtin(position) position : vec4f,
 }
 
-@group(0) @binding(0) var<storage> positions: array<vec4f>;
+struct Mesh {
+	vertexCount: u32,
+	vertices: array<vec4<f32>, 1024>, // 8 * 8 * 8 * 12 worst case of max verts
+}
+
+@group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
 @group(1) @binding(0) var <uniform> context: Context;
 
 @vertex
 fn vs_main(
-	@builtin(instance_index) id: u32,
-	@location(0) vertex_position: vec4f
+      @builtin(vertex_index) vertexIndex: u32,
+      @builtin(instance_index) instanceIndex: u32
 ) -> VertexOutput {
 	var out: VertexOutput;
-	out.position = context.perspective * context.view * (vertex_position + positions[id]);
+	
+	// Skip if vertex index exceeds actual vertex count for this mesh
+	if (vertexIndex >= meshes[instanceIndex].vertexCount) {
+		out.position = vec4(0.0, 0.0, 0.0, 0.0); // Degenerate vertex
+		return out;
+	}
+	
+	out.position = context.perspective * context.view * meshes[instanceIndex].vertices[vertexIndex];
 	return out;
 }
 
