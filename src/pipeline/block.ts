@@ -68,7 +68,11 @@ export class Block {
 		// Draw instances for each mesh chunk
 		const sSize = gridSize / 8;
 		const maxInstances = sSize * sSize * sSize;
-		pass.draw(1536 * 6, maxInstances); // Max vertices per mesh * max instances
+
+		for (let i = 0; i < maxInstances; ++i) {
+			pass.drawIndirect(this.mesh.commands, i * 16);
+		}
+
 		pass.end();
 
 		this.timer.resolveTimestamps(commandEncoder);

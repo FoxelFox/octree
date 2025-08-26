@@ -85,7 +85,7 @@ export class GPUContext {
 				} else {
 					try {
 						this.device = await adapter.requestDevice({
-							requiredFeatures: ['timestamp-query'],
+							requiredFeatures: ['timestamp-query', 'indirect-first-instance'],
 							requiredLimits: {
 								maxBufferSize: adapter.limits.maxBufferSize,
 								maxStorageBufferBindingSize: 1073741824,

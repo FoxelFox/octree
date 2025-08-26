@@ -5,12 +5,20 @@ struct Mesh {
 	vertices: array<vec4<f32>, 1536>, // worst case is way larger than 2048
 }
 
+  struct Command {
+      vertexCount: u32,
+      instanceCount: u32,
+      firstVertex: u32,
+      firstInstance: u32,
+  }
+
 // Input
 @group(0) @binding(0) var<storage, read> voxel: array<f32>;
 @group(1) @binding(0) var<uniform> context: Context;
 
 // Output
 @group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
+@group(0) @binding(2) var<storage, read_write> commands: array<Command>;
 
 
 // All 36 vertices for a cube's 12 triangles, with correct CCW winding.
@@ -61,7 +69,11 @@ fn getVoxel(pos: vec3<u32>) -> f32 {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	var mesh = Mesh();
+	var command = Command();
 	mesh.vertexCount = 0;
+
+
+
 
 	for (var x = 0u; x < COMPRESSION; x++) {
 		for (var y = 0u; y < COMPRESSION; y++) {
@@ -100,5 +112,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		}
 	}
 
-	meshes[to1DSmall(id)] = mesh;
+
+	let index = to1DSmall(id);
+
+	meshes[index] = mesh;
+
+	command.vertexCount = mesh.vertexCount;
+	command.instanceCount = 1u;
+	command.firstVertex = 0u;
+	command.firstInstance = index;
+	commands[index] = command;
+
 }
