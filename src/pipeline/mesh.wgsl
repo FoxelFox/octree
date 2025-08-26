@@ -2,7 +2,7 @@
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1024>, // 8 * 8 * 8 * 12 worst case of max verts
+	vertices: array<vec4<f32>, 1536>, // worst case is way larger than 2048
 }
 
 // Input
@@ -68,7 +68,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 			for (var z = 0u; z < COMPRESSION; z++) {
 				let coord = vec3<u32>(x,y,z);
 				let voxel = getVoxel(coord + id * COMPRESSION);
-				if (voxel < 0.0) {
+				if (voxel <= 0.0) {
 					for (var n = 0; n < 6; n++) {
 						// for every neighbor face
 						let neighborPos = vec3<i32>(coord + id * COMPRESSION) + NEIGHBORS[n];

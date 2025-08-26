@@ -38,9 +38,10 @@ document.addEventListener('keydown', ev => {
 	switch (ev.code) {
 		case 'KeyP':
 			pipelineMode++;
-			if (pipelineMode >= (Object.keys(PipelineMode).length - 1)) {
+			if (pipelineMode >= (Object.keys(PipelineMode).length / 2)) {
 				pipelineMode = 0;
 			}
+			console.log('Pipeline mode switched to:', pipelineMode === PipelineMode.Post ? 'Post' : 'Block');
 			break;
 	}
 
@@ -154,13 +155,18 @@ function loop() {
 	device.queue.submit([updateEncoder.finish()]);
 
 	post.afterUpdate();
+	block.afterUpdate();
 
 	// Calculate CPU frame time (excludes GPU work)
 	const frameEnd = performance.now();
 	const cpuFrameTime = frameEnd - frameStart;
 
-	// Update frame graph with GPU render time
-	frameGraph.addFrameTime(post.renderTime);
+	// Get current renderer's timing based on pipeline mode
+	const currentRenderTime = pipelineMode === PipelineMode.Post ? post.renderTime : block.renderTime;
+	const currentModeName = pipelineMode === PipelineMode.Post ? 'Post' : 'Block';
+
+	// Update frame graph with GPU render time from active renderer
+	frameGraph.addFrameTime(currentRenderTime);
 	frameGraph.render();
 
 	// Update timing display
@@ -168,8 +174,8 @@ function loop() {
 	timingDiv.innerHTML = `
         <b>One-Time Setup</b><br>
 		Octree Gen: ${noise.octreeTime.toFixed(3)} ms<br>
-        <b>Per Frame</b><br>
-		GPU Render: ${post.renderTime.toFixed(3)} ms<br>
+        <b>Per Frame (${currentModeName})</b><br>
+		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
 		FPS: ${stats ? stats.fps.toFixed(1) : '0.0'}
 	`;
