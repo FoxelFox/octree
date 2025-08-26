@@ -1,6 +1,7 @@
-import {context, contextUniform, device, gridSize} from "../index";
+import {canvas, context, contextUniform, device, gridSize} from "../index";
 import shader from "./block.wgsl" with {type: "text"};
 import {Mesh} from "./mesh";
+import {RenderTimer} from "./timing";
 
 export class Block {
 
@@ -11,16 +12,36 @@ export class Block {
 	bindGroup: GPUBindGroup
 	uniformBindGroup: GPUBindGroup
 	initialized: boolean;
+	timer: RenderTimer;
+	depthTexture: GPUTexture;
 
 
 	constructor() {
+		this.timer = new RenderTimer('block');
+		this.createDepthTexture();
+	}
 
+	createDepthTexture() {
+		if (this.depthTexture) {
+			this.depthTexture.destroy();
+		}
+
+		this.depthTexture = device.createTexture({
+			size: {width: canvas.width, height: canvas.height},
+			format: 'depth24plus',
+			usage: GPUTextureUsage.RENDER_ATTACHMENT
+		});
 	}
 
 	update(commandEncoder: GPUCommandEncoder) {
 
 		if (!this.initialized) {
 			this.init();
+		}
+
+		// Recreate depth texture if canvas size changed
+		if (this.depthTexture.width !== canvas.width || this.depthTexture.height !== canvas.height) {
+			this.createDepthTexture();
 		}
 
 		const pass = commandEncoder.beginRenderPass({
@@ -30,23 +51,35 @@ export class Block {
 				loadOp: 'clear',
 				storeOp: 'store',
 				clearValue: {r: 0, g: 0, b: 0, a: 0}
-			}]
+			}],
+			depthStencilAttachment: {
+				view: this.depthTexture.createView(),
+				depthClearValue: 1.0,
+				depthLoadOp: 'clear',
+				depthStoreOp: 'store'
+			},
+			timestampWrites: this.timer.getTimestampWrites(),
 		});
 
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.uniformBindGroup);
-		
+
 		// Draw instances for each mesh chunk
 		const sSize = gridSize / 8;
 		const maxInstances = sSize * sSize * sSize;
-		pass.draw(1024 * 6, maxInstances); // Max vertices per mesh * max instances
+		pass.draw(1536 * 6, maxInstances); // Max vertices per mesh * max instances
 		pass.end();
 
+		this.timer.resolveTimestamps(commandEncoder);
 	}
 
 	afterUpdate() {
+		this.timer.readTimestamps();
+	}
 
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 
 	init() {
@@ -71,6 +104,11 @@ export class Block {
 			},
 			primitive: {
 				topology: 'triangle-list'
+			},
+			depthStencil: {
+				depthWriteEnabled: true,
+				depthCompare: 'less',
+				format: 'depth24plus'
 			}
 		});
 

@@ -3,6 +3,7 @@ import {BlueNoise} from "./bluenoise";
 import {DistanceField} from "./distance_field";
 import shader from "./post.wgsl" with {type: "text"};
 import {Noise} from "./noise";
+import {RenderTimer} from "./timing";
 
 export class Post {
 	pipeline: GPURenderPipeline;
@@ -18,14 +19,7 @@ export class Post {
 	frameBufferBindgroups: GPUBindGroup[] = [];
 	sampler: GPUSampler;
 
-	// timing
-	querySet: GPUQuerySet;
-	queryBuffer: GPUBuffer;
-	queryReadbackBuffer: GPUBuffer;
-	isReadingTiming: boolean = false;
-	renderTime: number = 0;
-	lastTimingFrame: number = 0;
-
+	timer: RenderTimer;
 	frame = 0;
 
 	constructor() {
@@ -116,21 +110,8 @@ export class Post {
 			}
 		});
 
-		// Create timestamp query set for precise timing
-		this.querySet = device.createQuerySet({
-			type: 'timestamp',
-			count: 2, // start and end timestamps
-		});
-
-		this.queryBuffer = device.createBuffer({
-			size: 16, // 2 timestamps * 8 bytes each
-			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.queryReadbackBuffer = device.createBuffer({
-			size: 16,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-		});
+		// Create timing utility
+		this.timer = new RenderTimer('post');
 
 		// Initialize blue noise
 		this.blueNoise = new BlueNoise();
@@ -175,9 +156,6 @@ export class Post {
 			this.resizeFrameBuffer();
 		}
 
-		// Measure timing every frame for frame graph
-		const shouldMeasureTiming = !this.isReadingTiming && (this.frame - this.lastTimingFrame) > 0;
-
 		const passEncoder = commandEncoder.beginRenderPass({
 			colorAttachments: [{
 				view: context.getCurrentTexture().createView(),
@@ -196,11 +174,7 @@ export class Post {
 				loadOp: 'load',
 				storeOp: 'store',
 			}],
-			timestampWrites: shouldMeasureTiming ? {
-				querySet: this.querySet,
-				beginningOfPassWriteIndex: 0,
-				endOfPassWriteIndex: 1,
-			} : undefined,
+			timestampWrites: this.timer.getTimestampWrites(),
 		});
 		passEncoder.setPipeline(this.pipeline);
 		passEncoder.setBindGroup(0, this.uniformBindGroup);
@@ -208,38 +182,16 @@ export class Post {
 		passEncoder.draw(6);
 		passEncoder.end();
 
-		// Only resolve timestamp queries when measuring
-		if (shouldMeasureTiming) {
-			commandEncoder.resolveQuerySet(this.querySet, 0, 2, this.queryBuffer, 0);
-			commandEncoder.copyBufferToBuffer(this.queryBuffer, 0, this.queryReadbackBuffer, 0, 16);
-			this.lastTimingFrame = this.frame;
-		}
-
-		this.frame++
+		this.timer.resolveTimestamps(commandEncoder);
+		this.frame++;
 	}
 
 	afterUpdate() {
-		if (!this.isReadingTiming && (this.frame - this.lastTimingFrame) === 1) {
-			this.isReadingTiming = true;
-			this.queryReadbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
-				const times = new BigUint64Array(this.queryReadbackBuffer.getMappedRange());
-				const startTime = times[0];
-				const endTime = times[1];
+		this.timer.readTimestamps();
+	}
 
-				// Only update if we have valid timestamps
-				if (startTime > 0n && endTime > 0n && endTime >= startTime) {
-					const duration = endTime - startTime;
-					this.renderTime = Number(duration) / 1_000_000; // Convert to milliseconds
-				}
-				// Keep previous renderTime value if timestamps are invalid
-
-				this.queryReadbackBuffer.unmap();
-				this.isReadingTiming = false;
-			}).catch(() => {
-				// Handle mapping failure gracefully
-				this.isReadingTiming = false;
-			});
-		}
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 
 	resizeFrameBuffer() {
