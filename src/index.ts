@@ -1,15 +1,15 @@
-import {GPUContext} from "./gpu";
-import {Post} from "./pipeline/post";
-import {ContextUniform} from "./data/context";
-import {Noise} from "./pipeline/noise";
-import {DistanceField} from "./pipeline/distance_field";
-import {FrameGraph} from "./ui/FrameGraph";
-import {Block} from "./pipeline/block";
-import {Mesh} from "./pipeline/mesh";
+import { GPUContext } from "./gpu";
+import { Post } from "./pipeline/post";
+import { ContextUniform } from "./data/context";
+import { Noise } from "./pipeline/noise";
+import { DistanceField } from "./pipeline/distance_field";
+import { FrameGraph } from "./ui/FrameGraph";
+import { Block } from "./pipeline/block";
+import { Mesh } from "./pipeline/mesh";
 
 enum PipelineMode {
 	Post,
-	Block
+	Block,
 }
 
 export const gpu = new GPUContext();
@@ -17,7 +17,9 @@ await gpu.init();
 
 export const maxDepth = 8;
 export const gridSize = Math.pow(2, maxDepth);
-export const worstCaseMaxNodes = Math.floor((Math.pow(8, maxDepth + 1) - 1) / 7);
+export const worstCaseMaxNodes = Math.floor(
+	(Math.pow(8, maxDepth + 1) - 1) / 7,
+);
 export const device = gpu.device;
 export const context = gpu.context;
 export const canvas = gpu.canvas;
@@ -28,25 +30,25 @@ export const renderMode = gpu.renderMode;
 export const contextUniform = new ContextUniform();
 export let pipelineMode = PipelineMode.Post;
 
-console.log('maxDepth:', maxDepth);
-console.log('gridSize:', gridSize);
+console.log("maxDepth:", maxDepth);
+console.log("gridSize:", gridSize);
 
 const uniforms = [contextUniform];
 
-document.addEventListener('keydown', ev => {
-
+document.addEventListener("keydown", (ev) => {
 	switch (ev.code) {
-		case 'KeyP':
+		case "KeyP":
 			pipelineMode++;
-			if (pipelineMode >= (Object.keys(PipelineMode).length / 2)) {
+			if (pipelineMode >= Object.keys(PipelineMode).length / 2) {
 				pipelineMode = 0;
 			}
-			console.log('Pipeline mode switched to:', pipelineMode === PipelineMode.Post ? 'Post' : 'Block');
+			console.log(
+				"Pipeline mode switched to:",
+				pipelineMode === PipelineMode.Post ? "Post" : "Block",
+			);
 			break;
 	}
-
-})
-
+});
 
 // --- Setup Pipelines ---
 const noise = new Noise();
@@ -59,7 +61,7 @@ post.noise = noise;
 post.distanceField = distanceField;
 
 // --- Timing Display ---
-const timingDiv = document.createElement('div');
+const timingDiv = document.createElement("div");
 document.body.appendChild(timingDiv);
 timingDiv.style.cssText = `
 	position: fixed;
@@ -77,7 +79,7 @@ timingDiv.style.cssText = `
 
 // --- Frame Graph ---
 const frameGraph = new FrameGraph();
-const frameGraphContainer = document.createElement('div');
+const frameGraphContainer = document.createElement("div");
 frameGraphContainer.style.cssText = `
 	position: fixed;
 	top: 10px;
@@ -129,7 +131,9 @@ await runOneTimeSetup();
 loop();
 
 // this has to be set after first render loop due to safari bug
-document.getElementsByTagName('canvas')[0].setAttribute('style', 'position: fixed;')
+document
+	.getElementsByTagName("canvas")[0]
+	.setAttribute("style", "position: fixed;");
 
 function loop() {
 	const frameStart = performance.now();
@@ -151,7 +155,6 @@ function loop() {
 			break;
 	}
 
-
 	device.queue.submit([updateEncoder.finish()]);
 
 	post.afterUpdate();
@@ -162,8 +165,9 @@ function loop() {
 	const cpuFrameTime = frameEnd - frameStart;
 
 	// Get current renderer's timing based on pipeline mode
-	const currentRenderTime = pipelineMode === PipelineMode.Post ? post.renderTime : block.renderTime;
-	const currentModeName = pipelineMode === PipelineMode.Post ? 'Post' : 'Block';
+	const currentRenderTime =
+		pipelineMode === PipelineMode.Post ? post.renderTime : block.renderTime;
+	const currentModeName = pipelineMode === PipelineMode.Post ? "Post" : "Block";
 
 	// Update frame graph with GPU render time from active renderer
 	frameGraph.addFrameTime(currentRenderTime);
@@ -177,7 +181,7 @@ function loop() {
         <b>Per Frame (${currentModeName})</b><br>
 		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
-		FPS: ${stats ? stats.fps.toFixed(1) : '0.0'}
+		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}
 	`;
 
 	requestAnimationFrame(loop);

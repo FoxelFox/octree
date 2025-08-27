@@ -9,6 +9,7 @@ export class Mesh {
 	contextBindGroup: GPUBindGroup
 	meshes: GPUBuffer
 	commands: GPUBuffer
+	counter: GPUBuffer
 
 	init(noise: Noise) {
 		const sSize = gridSize / 8;
@@ -24,6 +25,13 @@ export class Mesh {
 			size: 16 * maxMeshCount,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT,
 		});
+
+		this.counter = device.createBuffer({
+			size: 4,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		});
+
+		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
 
 		const shaderModule = device.createShaderModule({
 			code: shader
@@ -51,6 +59,10 @@ export class Mesh {
 				{
 					binding: 2,
 					resource: {buffer: this.commands}, // Output
+				},
+				{
+					binding: 3,
+					resource: {buffer: this.counter}, // Output
 				},
 			],
 		});

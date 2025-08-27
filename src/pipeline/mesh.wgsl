@@ -19,6 +19,7 @@ struct Mesh {
 // Output
 @group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
 @group(0) @binding(2) var<storage, read_write> commands: array<Command>;
+@group(0) @binding(3) var<storage, read_write> counter: atomic<u32>;
 
 
 // All 36 vertices for a cube's 12 triangles, with correct CCW winding.
@@ -112,8 +113,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		}
 	}
 
-
-	let index = to1DSmall(id);
+	let index = atomicAdd(&counter, 1u);
+	//let index = to1DSmall(id);
 
 	meshes[index] = mesh;
 

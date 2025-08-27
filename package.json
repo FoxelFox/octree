@@ -1,11 +1,13 @@
 {
   "scripts": {
     "build": "bun run build.ts",
-    "dev": "bun run build.ts --dev"
+    "dev": "bun run build.ts --dev",
+    "start": "http-server dist"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@webgpu/types": "^0.1.64"
+    "@webgpu/types": "^0.1.64",
+    "http-server": "^14.0.0"
   },
   "dependencies": {
     "wgpu-matrix": "^3.4.0"
