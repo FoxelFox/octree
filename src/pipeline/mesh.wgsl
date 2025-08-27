@@ -5,12 +5,12 @@ struct Mesh {
 	vertices: array<vec4<f32>, 1536>, // worst case is way larger than 2048
 }
 
-  struct Command {
-      vertexCount: u32,
-      instanceCount: u32,
-      firstVertex: u32,
-      firstInstance: u32,
-  }
+struct Command {
+	vertexCount: u32,
+	instanceCount: u32,
+	firstVertex: u32,
+	firstInstance: u32,
+}
 
 // Input
 @group(0) @binding(0) var<storage, read> voxel: array<f32>;
@@ -19,7 +19,6 @@ struct Mesh {
 // Output
 @group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
 @group(0) @binding(2) var<storage, read_write> commands: array<Command>;
-@group(0) @binding(3) var<storage, read_write> counter: atomic<u32>;
 
 
 // All 36 vertices for a cube's 12 triangles, with correct CCW winding.
@@ -86,7 +85,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						// for every neighbor face
 						let neighborPos = vec3<i32>(coord + id * COMPRESSION) + NEIGHBORS[n];
 						var shouldAddFace = false;
-						
+
 						// Check if neighbor is out of bounds (edge of grid)
 						if (neighborPos.x < 0 || neighborPos.y < 0 || neighborPos.z < 0 ||
 						    neighborPos.x >= i32(context.grid_size) ||
@@ -97,7 +96,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 							// In bounds, check if neighbor is empty
 							shouldAddFace = getVoxel(vec3<u32>(neighborPos)) > 0.0;
 						}
-						
+
 						if (shouldAddFace) {
 							// Generate 6 vertices (2 triangles) for this face
 							for (var v = 0; v < 6; v++) {
@@ -113,8 +112,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		}
 	}
 
-	let index = atomicAdd(&counter, 1u);
-	//let index = to1DSmall(id);
+	let index = to1DSmall(id);
 
 	meshes[index] = mesh;
 

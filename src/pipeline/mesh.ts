@@ -1,20 +1,18 @@
-import {contextUniform, device, gridSize} from "../index";
+import { contextUniform, device, gridSize } from "../index";
 import shader from "./mesh.wgsl";
-import {Noise} from "./noise";
+import { Noise } from "./noise";
 
 export class Mesh {
-
-	pipeline: GPUComputePipeline
-	bindGroup: GPUBindGroup
-	contextBindGroup: GPUBindGroup
-	meshes: GPUBuffer
-	commands: GPUBuffer
-	counter: GPUBuffer
+	pipeline: GPUComputePipeline;
+	bindGroup: GPUBindGroup;
+	contextBindGroup: GPUBindGroup;
+	meshes: GPUBuffer;
+	commands: GPUBuffer;
 
 	init(noise: Noise) {
 		const sSize = gridSize / 8;
-		const maxMeshCount = sSize * sSize * sSize
-		const maxMeshSize = 1536 * (16 + 4)
+		const maxMeshCount = sSize * sSize * sSize;
+		const maxMeshSize = 1536 * (16 + 4);
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,
@@ -23,25 +21,21 @@ export class Mesh {
 
 		this.commands = device.createBuffer({
 			size: 16 * maxMeshCount,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.INDIRECT,
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.INDIRECT,
 		});
-
-		this.counter = device.createBuffer({
-			size: 4,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		});
-
-		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
 
 		const shaderModule = device.createShaderModule({
-			code: shader
+			code: shader,
 		});
 
 		this.pipeline = device.createComputePipeline({
-			layout: 'auto',
+			layout: "auto",
 			compute: {
 				module: shaderModule,
-				entryPoint: 'main',
+				entryPoint: "main",
 			},
 		});
 
@@ -50,29 +44,27 @@ export class Mesh {
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: noise.noiseBuffer}, // Input
+					resource: { buffer: noise.noiseBuffer }, // Input
 				},
 				{
 					binding: 1,
-					resource: {buffer: this.meshes}, // Output
+					resource: { buffer: this.meshes }, // Output
 				},
 				{
 					binding: 2,
-					resource: {buffer: this.commands}, // Output
-				},
-				{
-					binding: 3,
-					resource: {buffer: this.counter}, // Output
+					resource: { buffer: this.commands }, // Output
 				},
 			],
 		});
 
 		this.contextBindGroup = device.createBindGroup({
 			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [{
-				binding: 0,
-				resource: {buffer: contextUniform.uniformBuffer}
-			}]
+			entries: [
+				{
+					binding: 0,
+					resource: { buffer: contextUniform.uniformBuffer },
+				},
+			],
 		});
 	}
 
@@ -84,9 +76,12 @@ export class Mesh {
 
 		// Dispatch with 4x4x4 workgroup size
 		const workgroupsPerDim = Math.ceil(gridSize / 8 / 4);
-		pass.dispatchWorkgroups(workgroupsPerDim, workgroupsPerDim, workgroupsPerDim);
+		pass.dispatchWorkgroups(
+			workgroupsPerDim,
+			workgroupsPerDim,
+			workgroupsPerDim,
+		);
 		pass.end();
-
 	}
 
 	async readback(): Promise<void> {
@@ -107,5 +102,4 @@ export class Mesh {
 
 		console.log(new Float32Array(result));
 	}
-
 }
