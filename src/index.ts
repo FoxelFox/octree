@@ -28,7 +28,7 @@ export const camera = gpu.camera;
 export const time = gpu.time;
 export const renderMode = gpu.renderMode;
 export const contextUniform = new ContextUniform();
-export let pipelineMode = PipelineMode.Post;
+export let pipelineMode = PipelineMode.Block;
 
 console.log("maxDepth:", maxDepth);
 console.log("gridSize:", gridSize);

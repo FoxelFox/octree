@@ -1,31 +1,39 @@
-import {camera, canvas, device, gridSize, maxDepth, mouse, renderMode, time} from "../index";
-import {taaToggleState} from "../gpu";
-import {mat4} from "wgpu-matrix";
+import {
+	camera,
+	canvas,
+	device,
+	gridSize,
+	maxDepth,
+	mouse,
+	renderMode,
+	time,
+} from "../index";
+import { taaToggleState } from "../gpu";
+import { mat4 } from "wgpu-matrix";
 
 export class ContextUniform {
 	uniformArray: Float32Array = new Float32Array(
 		10 + // stuff
-		2 + // padding
-		4 * 4 + // view
-		4 * 4 + // inverse view
-		4 * 4 + // perspective
-		4 * 4 + // inverse perspective
-		4 * 4 + // prev view projection
-		2 + // jitter offset
-		3 + // camera velocity
-		1 + // frame count
-		1 + // render mode
-		1 + // random seed
-		1 + // sdf_epsilon
-		1 + // sdf_max_steps
-		1 + // sdf_over_relaxation
-		1 + // taa_enabled
-		1 + // hybrid_threshold
-		3     // padding to reach 432 bytes (108 floats * 4 bytes = 432)
-
+			2 + // padding
+			4 * 4 + // view
+			4 * 4 + // inverse view
+			4 * 4 + // perspective
+			4 * 4 + // inverse perspective
+			4 * 4 + // prev view projection
+			2 + // jitter offset
+			3 + // camera velocity
+			1 + // frame count
+			1 + // render mode
+			1 + // random seed
+			1 + // sdf_epsilon
+			1 + // sdf_max_steps
+			1 + // sdf_over_relaxation
+			1 + // taa_enabled
+			1 + // hybrid_threshold
+			3, // padding to reach 432 bytes (108 floats * 4 bytes = 432)
 	);
 	uniformBuffer: GPUBuffer;
-	canvas = document.getElementsByTagName('canvas')[0];
+	canvas = document.getElementsByTagName("canvas")[0];
 
 	private prevViewProjection: Float32Array = new Float32Array(16);
 	private frameCount: number = 0;
@@ -34,7 +42,7 @@ export class ContextUniform {
 	constructor() {
 		this.uniformBuffer = device.createBuffer({
 			size: this.uniformArray.byteLength,
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 	}
 
@@ -61,7 +69,7 @@ export class ContextUniform {
 		const target = [
 			eye[0] + Math.sin(camera.yaw) * Math.cos(camera.pitch),
 			eye[1] + Math.sin(camera.pitch),
-			eye[2] + Math.cos(camera.yaw) * Math.cos(camera.pitch)
+			eye[2] + Math.cos(camera.yaw) * Math.cos(camera.pitch),
 		];
 		const up = [0, 1, 0];
 		const view = mat4.lookAt(eye, target, up);
@@ -70,16 +78,18 @@ export class ContextUniform {
 		this.uniformArray.set(mat4.inverse(view), o);
 		o += 16;
 
-		const fov = 60 * Math.PI / 180;
+		const fov = (60 * Math.PI) / 180;
 		const aspect = this.canvas.width / this.canvas.height;
-		const near = 0.1
-		const far = 1000
+		const near = 0.1;
+		const far = 1000;
 
 		// Create jittered projection matrix for TAA
 		const perspective = mat4.perspective(fov, aspect, near, far);
 		const jitteredPerspective = mat4.clone(perspective);
-		jitteredPerspective[8] += jitterX * 2.0; // Apply jitter to projection
-		jitteredPerspective[9] += jitterY * 2.0;
+		if (taaToggleState.enabled) {
+			jitteredPerspective[8] += jitterX * 2.0; // Apply jitter to projection
+			jitteredPerspective[9] += jitterY * 2.0;
+		}
 
 		this.uniformArray.set(jitteredPerspective, o);
 		o += 16;
@@ -101,16 +111,18 @@ export class ContextUniform {
 		const currentCameraPosition = [eye[0], eye[1], eye[2]];
 		let cameraVelocity = [0, 0, 0];
 		if (this.frameCount > 0) {
-			cameraVelocity[0] = (currentCameraPosition[0] - this.prevCameraPosition[0]) / time.delta;
-			cameraVelocity[1] = (currentCameraPosition[1] - this.prevCameraPosition[1]) / time.delta;
-			cameraVelocity[2] = (currentCameraPosition[2] - this.prevCameraPosition[2]) / time.delta;
+			cameraVelocity[0] =
+				(currentCameraPosition[0] - this.prevCameraPosition[0]) / time.delta;
+			cameraVelocity[1] =
+				(currentCameraPosition[1] - this.prevCameraPosition[1]) / time.delta;
+			cameraVelocity[2] =
+				(currentCameraPosition[2] - this.prevCameraPosition[2]) / time.delta;
 		}
 
 		// Store camera velocity
 		this.uniformArray[o++] = cameraVelocity[0];
 		this.uniformArray[o++] = cameraVelocity[1];
 		this.uniformArray[o++] = cameraVelocity[2];
-
 
 		// Store frame count
 		integer[o++] = this.frameCount;
