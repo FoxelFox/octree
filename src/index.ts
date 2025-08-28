@@ -6,6 +6,7 @@ import { DistanceField } from "./pipeline/distance_field";
 import { FrameGraph } from "./ui/FrameGraph";
 import { Block } from "./pipeline/block";
 import { Mesh } from "./pipeline/mesh";
+import { Cull } from "./pipeline/cull";
 
 enum PipelineMode {
 	Post,
@@ -56,6 +57,7 @@ const distanceField = new DistanceField();
 const post = new Post();
 const block = new Block();
 const mesh = new Mesh();
+const cull = new Cull();
 block.mesh = mesh;
 post.noise = noise;
 post.distanceField = distanceField;
@@ -112,6 +114,7 @@ async function runOneTimeSetup() {
 	// Initialize distance field after noise pipeline
 	await distanceField.init(noise.noiseBuffer, contextUniform.uniformBuffer);
 	mesh.init(noise);
+	cull.init(noise, mesh);
 
 	// Generate distance field from voxel data
 	console.log("Generating distance field...");
@@ -119,6 +122,7 @@ async function runOneTimeSetup() {
 
 	distanceField.update(encoder);
 	mesh.update(encoder);
+	cull.update(encoder);
 	device.queue.submit([encoder.finish()]);
 	await device.queue.onSubmittedWorkDone();
 
