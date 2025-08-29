@@ -16,10 +16,6 @@ const INVALID_INDEX: u32 = 0xFFFFFFFFu; // Changed from 0u to avoid collision wi
 @group(0) @binding(1) var<storage, read_write> node_counter: atomic<u32>;
 @group(0) @binding(2) var<storage, read_write> nodes: array<Octree>;
 
-fn to1D(id: vec3<u32>) -> u32 {
-    return id.z * context.grid_size *  context.grid_size + id.y *  context.grid_size + id.x;
-}
-
 fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
     // Calculate the size of the current octree level
     let level_size =  context.grid_size >> depth;
