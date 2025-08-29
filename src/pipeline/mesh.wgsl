@@ -49,17 +49,6 @@ const NEIGHBORS = array<vec3<i32>, 6>(
 	vec3(0, 0, 1), vec3(0, 0, -1)
 );
 
-const COMPRESSION = 8;
-
-fn to1D(id: vec3<u32>) -> u32 {
-	return id.z * context.grid_size * context.grid_size + id.y * context.grid_size + id.x;
-}
-
-fn to1DSmall(id: vec3<u32>) -> u32 {
-	let size = context.grid_size / COMPRESSION;
-	return id.z * size * size + id.y * size + id.x;
-}
-
 fn getVoxel(pos: vec3<u32>) -> f32 {
 	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
 	return voxel[index];

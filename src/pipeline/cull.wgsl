@@ -14,13 +14,16 @@ struct Mesh {
 @group(0) @binding(2) var<storage, read_write> indices: array<u32>;
 
 @compute @workgroup_size(4, 4, 4)
-fn main() {
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	// fuck you compiler
 	let c = &counter;
 	let m = mesh[0];
 	let co = context;
 	let i = indices[0];
+
+	// cull by viewport
+	let index = to1DSmall(id);
 
 
 

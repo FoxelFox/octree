@@ -13,10 +13,6 @@ struct DistanceNode {
 
 @group(1) @binding(0) var<uniform> context: Context;
 
-fn to1D(id: vec3<u32>) -> u32 {
-    return id.z * context.grid_size * context.grid_size + id.y * context.grid_size + id.x;
-}
-
 // Get continuous SDF value at position
 fn get_sdf_value(pos: vec3<i32>) -> f32 {
     let gs = i32(context.grid_size);
