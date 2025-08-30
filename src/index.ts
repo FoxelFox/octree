@@ -123,12 +123,10 @@ async function runOneTimeSetup() {
 
 	distanceField.update(encoder);
 	mesh.update(encoder);
-	cull.update(encoder);
 	device.queue.submit([encoder.finish()]);
 	await device.queue.onSubmittedWorkDone();
 
 	await mesh.readback();
-	await cull.readback();
 
 	console.log("Setup complete.");
 }
@@ -157,6 +155,8 @@ function loop() {
 			post.update(updateEncoder);
 			break;
 		case PipelineMode.Block:
+			// Update culling every frame (async on GPU)
+			cull.update(updateEncoder);
 			block.update(updateEncoder);
 			break;
 	}
@@ -166,10 +166,6 @@ function loop() {
 	post.afterUpdate();
 	block.afterUpdate();
 
-	// Calculate CPU frame time (excludes GPU work)
-	const frameEnd = performance.now();
-	const cpuFrameTime = frameEnd - frameStart;
-
 	// Get current renderer's timing based on pipeline mode
 	const currentRenderTime =
 		pipelineMode === PipelineMode.Post ? post.renderTime : block.renderTime;
@@ -178,6 +174,10 @@ function loop() {
 	// Update frame graph with GPU render time from active renderer
 	frameGraph.addFrameTime(currentRenderTime);
 	frameGraph.render();
+
+	// Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
+	const frameEnd = performance.now();
+	const cpuFrameTime = frameEnd - frameStart;
 
 	// Update timing display
 	const stats = frameGraph.getCurrentStats();

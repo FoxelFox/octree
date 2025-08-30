@@ -1,7 +1,7 @@
-import { contextUniform, device, gridSize } from "..";
-import { Mesh } from "./mesh";
-import { Noise } from "./noise";
-import shader from "./cull.wgsl" with { type: "text" };
+import {contextUniform, device, gridSize} from "..";
+import {Mesh} from "./mesh";
+import {Noise} from "./noise";
+import shader from "./cull.wgsl" with {type: "text"};
 
 export class Cull {
 	counter: GPUBuffer;
@@ -14,7 +14,9 @@ export class Cull {
 
 	// output
 	count: number = 0;
-	indices: Uint32Array;
+	indices: Uint32Array = new Uint32Array(0);
+	private readbackInProgress = false;
+	private framesSinceUpdate = 0;
 
 	init(noise: Noise, mesh: Mesh) {
 		this.counter = device.createBuffer({
@@ -31,7 +33,7 @@ export class Cull {
 		});
 
 		this.indicesBuffer = device.createBuffer({
-			size: Math.pow(gridSize / 8, 3) * 4,
+			size: Math.pow(gridSize / 8, 3) * 4 * 6,
 			usage:
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
@@ -76,17 +78,21 @@ export class Cull {
 		});
 
 		this.contextBindGroup = device.createBindGroup({
+			label: "Cull Context",
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: contextUniform.uniformBuffer },
+					resource: {buffer: contextUniform.uniformBuffer},
 				},
 			],
 		});
 	}
 
 	update(encoder: GPUCommandEncoder) {
+		// Reset counter before culling
+		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
+
 		const pass = encoder.beginComputePass();
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
@@ -100,6 +106,70 @@ export class Cull {
 			workgroupsPerDim,
 		);
 		pass.end();
+
+		// Start async readback if not already in progress
+		this.framesSinceUpdate++;
+		if (!this.readbackInProgress && this.framesSinceUpdate >= 2) { // Update every 2 frames
+			this.startAsyncReadback();
+			this.framesSinceUpdate = 0;
+		}
+	}
+
+	private startAsyncReadback() {
+		if (this.readbackInProgress) return;
+
+		this.readbackInProgress = true;
+
+		// Start async readback without blocking
+		this.performAsyncReadback().then(() => {
+			this.readbackInProgress = false;
+		}).catch((error) => {
+			console.warn("Culling readback failed:", error);
+			this.readbackInProgress = false;
+		});
+	}
+
+	private async performAsyncReadback(): Promise<void> {
+		// Wait a frame to ensure GPU work is submitted
+		await new Promise(resolve => requestAnimationFrame(resolve));
+
+		// Read counter
+		const counterEncoder = device.createCommandEncoder();
+		counterEncoder.copyBufferToBuffer(
+			this.counter,
+			0,
+			this.counterReadback,
+			0,
+			this.counter.size,
+		);
+		device.queue.submit([counterEncoder.finish()]);
+
+		await this.counterReadback.mapAsync(GPUMapMode.READ);
+		const counterData = this.counterReadback.getMappedRange();
+		const newCount = new Uint32Array(counterData)[0];
+		this.counterReadback.unmap();
+
+		// Only update if count changed significantly or first time
+		//if (Math.abs(newCount - this.count) > 10 || this.count === 0) {
+		this.count = newCount;
+
+		// Read indices
+		const indicesEncoder = device.createCommandEncoder();
+		const readSize = Math.min(this.count * 4, this.indicesBuffer.size);
+		indicesEncoder.copyBufferToBuffer(
+			this.indicesBuffer,
+			0,
+			this.indicesReadback,
+			0,
+			readSize,
+		);
+		device.queue.submit([indicesEncoder.finish()]);
+
+		await this.indicesReadback.mapAsync(GPUMapMode.READ);
+		const indicesData = this.indicesReadback.getMappedRange();
+		this.indices = new Uint32Array(indicesData.slice(0, readSize));
+		this.indicesReadback.unmap();
+		//}
 	}
 
 	async readback(): Promise<void> {

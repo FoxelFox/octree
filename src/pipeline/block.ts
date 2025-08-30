@@ -1,8 +1,8 @@
-import { canvas, context, contextUniform, device, gridSize } from "../index";
-import shader from "./block.wgsl" with { type: "text" };
-import { Cull } from "./cull";
-import { Mesh } from "./mesh";
-import { RenderTimer } from "./timing";
+import {canvas, context, contextUniform, device, gridSize} from "../index";
+import shader from "./block.wgsl" with {type: "text"};
+import {Cull} from "./cull";
+import {Mesh} from "./mesh";
+import {RenderTimer} from "./timing";
 
 export class Block {
 	// input
@@ -27,7 +27,7 @@ export class Block {
 		}
 
 		this.depthTexture = device.createTexture({
-			size: { width: canvas.width, height: canvas.height },
+			size: {width: canvas.width, height: canvas.height},
 			format: "depth24plus",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
@@ -53,7 +53,7 @@ export class Block {
 					view: context.getCurrentTexture().createView(),
 					loadOp: "clear",
 					storeOp: "store",
-					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+					clearValue: {r: 0, g: 0, b: 0, a: 0},
 				},
 			],
 			depthStencilAttachment: {
@@ -69,11 +69,14 @@ export class Block {
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.uniformBindGroup);
 
-		// Draw instances for each mesh chunk
-		const sSize = gridSize / 8;
-
-		for (let i = 0; i < this.cull.count; ++i) {
-			pass.drawIndirect(this.mesh.commands, this.cull.indices[i] * 16);
+		// Draw instances for each mesh chunk (only if culling data is ready)
+		if (this.cull.count > 0 && this.cull.indices && this.cull.indices.length > 0) {
+			for (let i = 0; i < this.cull.count && i < this.cull.indices.length; ++i) {
+				const meshIndex = this.cull.indices[i];
+				if (typeof meshIndex === 'number' && isFinite(meshIndex)) {
+					pass.drawIndirect(this.mesh.commands, meshIndex * 16);
+				}
+			}
 		}
 
 		pass.end();
@@ -98,7 +101,7 @@ export class Block {
 					label: "Block Fragment Shader",
 					code: shader,
 				}),
-				targets: [{ format: "bgra8unorm" }],
+				targets: [{format: "bgra8unorm"}],
 			},
 			vertex: {
 				module: device.createShaderModule({
@@ -108,6 +111,7 @@ export class Block {
 			},
 			primitive: {
 				topology: "triangle-list",
+				cullMode: "back"
 			},
 			depthStencil: {
 				depthWriteEnabled: true,
@@ -119,13 +123,13 @@ export class Block {
 		this.bindGroup = device.createBindGroup({
 			label: "Block",
 			layout: this.pipeline.getBindGroupLayout(0),
-			entries: [{ binding: 0, resource: this.mesh.meshes }],
+			entries: [{binding: 0, resource: this.mesh.meshes}],
 		});
 
 		this.uniformBindGroup = device.createBindGroup({
 			label: "Block BindGroup for Context",
 			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [{ binding: 0, resource: contextUniform.uniformBuffer }],
+			entries: [{binding: 0, resource: contextUniform.uniformBuffer}],
 		});
 
 		this.initialized = true;
