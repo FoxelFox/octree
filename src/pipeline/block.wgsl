@@ -7,7 +7,8 @@ struct VertexOutput {
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1536>, // worst case is way larger than 1536
+	normal: vec3<f32>,
+	vertices: array<vec4<f32>, 384>, // worst case is way larger than 2048
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
@@ -46,12 +47,6 @@ fn vs_main(
 	
 	// Generate color once per vertex based on mesh index
 	out.color = randomColor(instanceIndex);
-	
-	// Skip if vertex index exceeds actual vertex count for this mesh
-	if (vertexIndex >= meshes[instanceIndex].vertexCount) {
-		out.position = vec4(0.0, 0.0, 0.0, 0.0); // Degenerate vertex
-		return out;
-	}
 	
 	out.position = context.perspective * context.view * meshes[instanceIndex].vertices[vertexIndex];
 	return out;

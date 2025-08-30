@@ -1,6 +1,6 @@
-import { contextUniform, device, gridSize } from "../index";
+import {contextUniform, device, gridSize} from "../index";
 import shader from "./mesh.wgsl";
-import { Noise } from "./noise";
+import {Noise} from "./noise";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
@@ -11,8 +11,8 @@ export class Mesh {
 
 	init(noise: Noise) {
 		const sSize = gridSize / 8;
-		const maxMeshCount = sSize * sSize * sSize;
-		const maxMeshSize = 1536 * (16 + 4);
+		const maxMeshCount = sSize * sSize * sSize * 6;
+		const maxMeshSize = 384 * 16 + 4 + 12;
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,
@@ -32,6 +32,7 @@ export class Mesh {
 		});
 
 		this.pipeline = device.createComputePipeline({
+			label: "Mesh",
 			layout: "auto",
 			compute: {
 				module: shaderModule,
@@ -40,29 +41,31 @@ export class Mesh {
 		});
 
 		this.bindGroup = device.createBindGroup({
+			label: "Mesh",
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: noise.noiseBuffer }, // Input
+					resource: {buffer: noise.noiseBuffer}, // Input
 				},
 				{
 					binding: 1,
-					resource: { buffer: this.meshes }, // Output
+					resource: {buffer: this.meshes}, // Output
 				},
 				{
 					binding: 2,
-					resource: { buffer: this.commands }, // Output
+					resource: {buffer: this.commands}, // Output
 				},
 			],
 		});
 
 		this.contextBindGroup = device.createBindGroup({
+			label: "Mesh Context",
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: contextUniform.uniformBuffer },
+					resource: {buffer: contextUniform.uniformBuffer},
 				},
 			],
 		});
@@ -100,6 +103,6 @@ export class Mesh {
 		readBuffer.unmap();
 		readBuffer.destroy();
 
-		console.log(new Float32Array(result));
+		console.log("Meshes", new Float32Array(result));
 	}
 }

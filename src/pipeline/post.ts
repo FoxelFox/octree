@@ -15,7 +15,6 @@ export class Post {
 
 	frameBuffers: GPUTexture[] = [];
 	worldPosBuffers: GPUTexture[] = [];
-	heatmapBuffers: GPUTexture[] = [];
 	frameBufferBindgroups: GPUBindGroup[] = [];
 	sampler: GPUSampler;
 
@@ -101,8 +100,7 @@ export class Post {
 						}
 					},
 					{format: 'bgra8unorm'},
-					{format: 'rgba32float'},
-					{format: 'bgra8unorm'} // heatmap texture
+					{format: 'rgba32float'}
 				]
 			},
 			primitive: {
@@ -169,10 +167,6 @@ export class Post {
 				view: this.worldPosBuffers[(this.frame + 1) % 2].createView(),
 				loadOp: 'load',
 				storeOp: 'store',
-			}, {
-				view: this.heatmapBuffers[(this.frame + 1) % 2].createView(),
-				loadOp: 'load',
-				storeOp: 'store',
 			}],
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
@@ -200,12 +194,9 @@ export class Post {
 			this.frameBuffers[1].destroy();
 			this.worldPosBuffers[0]?.destroy();
 			this.worldPosBuffers[1]?.destroy();
-			this.heatmapBuffers[0]?.destroy();
-			this.heatmapBuffers[1]?.destroy();
 
 			this.frameBuffers.length = 0;
 			this.worldPosBuffers.length = 0;
-			this.heatmapBuffers.length = 0;
 			this.frameBufferBindgroups.length = 0;
 		}
 
@@ -219,12 +210,6 @@ export class Post {
 			this.worldPosBuffers.push(device.createTexture({
 				size: {width: canvas.width, height: canvas.height},
 				format: 'rgba32float',
-				usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-			}));
-
-			this.heatmapBuffers.push(device.createTexture({
-				size: {width: canvas.width, height: canvas.height},
-				format: navigator.gpu.getPreferredCanvasFormat(),
 				usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
 			}));
 		}

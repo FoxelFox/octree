@@ -844,8 +844,7 @@ fn raycast_octree_stack(ray_origin: vec3<f32>, ray_dir: vec3<f32>, grid_size: u3
 struct FragmentOutput {
   @location(0) colorForCanvas: vec4<f32>,
   @location(1) colorForTexture: vec4<f32>,
-  @location(2) worldPosition: vec4<f32>,
-  @location(3) heatmap: vec4<f32>,
+  @location(2) worldPosition: vec4<f32>
 };
 
 // Convert step count to heatmap color
@@ -1080,13 +1079,11 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
     // Normal rendering mode (octree, SDF, or hybrid)
     output.colorForTexture = final_color;
     output.colorForCanvas = final_color;
-    output.heatmap = vec4(0.0, 0.0, 0.0, 1.0); // Black heatmap when not in heatmap mode
   } else {
     // Heatmap rendering mode (octree, SDF, or hybrid)
     let heatmap_output = vec4(heatmap_color, 1.0);
     output.colorForTexture = heatmap_output;
     output.colorForCanvas = heatmap_output;
-    output.heatmap = heatmap_output;
   }
   
   // Store world position for next frame's TAA (w component stores hit validity)

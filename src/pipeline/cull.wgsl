@@ -2,7 +2,8 @@
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1536>, // worst case is way larger than 2048
+	normal: vec3<f32>,
+	vertices: array<vec4<f32>, 384>, // worst case is way larger than 2048
 }
 
 // Input
@@ -18,12 +19,26 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	// fuck you compiler
 	let co = context;
-
 	let index = to1DSmall(id);
-	let mesh = meshes[index];
 
-	if (mesh.vertexCount > 0) {
-		let ptr = atomicAdd(&counter, 1u);
-		indices[ptr] = index;
+	for (var n = 0u; n < 6u; n++) {
+		let i = index * 6 + n;
+		let mesh = meshes[i];
+
+		if (mesh.vertexCount > 0) {
+			// Extract camera direction from inverse view matrix (forward vector)
+			let camera_forward = normalize(co.inverse_view[2].xyz);
+			
+			// Cull back-facing meshes (dot product > 0 means facing camera)
+			if (dot(mesh.normal, camera_forward) > 0.0) {
+				let pointer = atomicAdd(&counter, 1u);
+				indices[pointer] = i;
+			}
+		}
 	}
+
+
+
+
+
 }

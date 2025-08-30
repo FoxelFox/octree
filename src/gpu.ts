@@ -1,5 +1,5 @@
 // Global TAA state that can be modified
-export let taaToggleState = { enabled: false };
+export let taaToggleState = {enabled: false};
 
 export class GPUContext {
 	device: GPUDevice;
@@ -54,7 +54,7 @@ export class GPUContext {
 			pitch: -0.8,
 			speed: 16,
 		};
-		this.time = { now: 0, delta: 0 };
+		this.time = {now: 0, delta: 0};
 		this.renderMode = {
 			current: 0,
 			modes: [
@@ -99,8 +99,8 @@ export class GPUContext {
 							requiredFeatures: ["timestamp-query", "indirect-first-instance"],
 							requiredLimits: {
 								maxBufferSize: adapter.limits.maxBufferSize,
-								maxStorageBufferBindingSize: 1073741824,
-								maxColorAttachmentBytesPerSample: 128,
+								maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+								maxColorAttachmentBytesPerSample: 32,
 							},
 						});
 					} catch (deviceError) {
