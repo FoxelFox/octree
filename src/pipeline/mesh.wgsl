@@ -2,8 +2,7 @@
 
 struct Mesh {
 	vertexCount: u32,
-	normal: vec3<f32>,
-	vertices: array<vec4<f32>, 384>, // worst case is way larger than 2048
+	vertices: array<vec4<f32>, 2048>, // worst case is way larger than 2048
 }
 
 struct Command {
@@ -58,14 +57,7 @@ fn getVoxel(pos: vec3<u32>) -> f32 {
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
-	var group = array<Mesh, 6>(
-		Mesh(0u, vec3( 1, 0, 0), array<vec4<f32>, 384>()),
-		Mesh(0u, vec3(-1, 0, 0), array<vec4<f32>, 384>()),
-		Mesh(0u, vec3( 0, 1, 0), array<vec4<f32>, 384>()),
-		Mesh(0u, vec3( 0,-1, 0), array<vec4<f32>, 384>()),
-		Mesh(0u, vec3( 0, 0, 1), array<vec4<f32>, 384>()),
-		Mesh(0u, vec3( 0, 0,-1), array<vec4<f32>, 384>()),
-	);
+	var mesh = Mesh();
 	var command = Command();
 
 	for (var x = 0u; x < COMPRESSION; x++) {
@@ -95,8 +87,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 							for (var v = 0; v < 6; v++) {
 								var vertexOffset = CUBE_TRIANGLE_VERTICES[n * 6 + v];
 								var worldVertex = vec3<f32>(coord + id * COMPRESSION) + vec3<f32>(vertexOffset);
-								group[n].vertices[group[n].vertexCount] = vec4<f32>(worldVertex, 1.0);
-								group[n].vertexCount++;
+								mesh.vertices[mesh.vertexCount] = vec4<f32>(worldVertex, 1.0);
+								mesh.vertexCount++;
 							}
 						}
 					}
@@ -107,14 +99,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	let index = to1DSmall(id);
 
-	for (var n = 0u; n < 6u; n++) {
-		let i = index * 6u + n;
-		meshes[i] = group[n];
+	meshes[index] = mesh;
 
-		command.vertexCount = group[n].vertexCount;
-		command.instanceCount = 1u;
-		command.firstVertex = 0u;
-		command.firstInstance = i;
-		commands[i] = command;
-	}
+	command.vertexCount = mesh.vertexCount;
+	command.instanceCount = 1u;
+	command.firstVertex = 0u;
+	command.firstInstance = index;
+	commands[index] = command;
+
 }

@@ -7,8 +7,7 @@ struct VertexOutput {
 
 struct Mesh {
 	vertexCount: u32,
-	normal: vec3<f32>,
-	vertices: array<vec4<f32>, 384>, // worst case is way larger than 2048
+	vertices: array<vec4<f32>, 2048>, // worst case is way larger than 2048
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
