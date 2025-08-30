@@ -85,13 +85,13 @@ fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
 // Generate continuous SDF values instead of binary 0/1
 fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
     // Generate deterministic noise that doesn't depend on time for TAA stability
-    let noise_value = noise3(vec3<f32>(pos) / 10.0);
-    
+    let noise_value = noise3(vec3<f32>(pos) / 20.0);
+
     // Convert noise from [0,1] range to SDF values
     // Values > 0.5 become negative (inside), values < 0.5 become positive (outside)
     let threshold = 0.5;
     let sdf_range = 2.0; // Maximum distance value
-    
+
     return (threshold - noise_value) * sdf_range;
 }
 
@@ -121,7 +121,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Generate continuous SDF values
     let sdf_value = generate_sdf_noise(id);
     noise[to1D(id)] = sdf_value;
-    
+
     // Generate binary value for octree (for compatibility)
     let zero_or_one = select(0u, 1u, sdf_value < 0.0);
 

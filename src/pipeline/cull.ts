@@ -5,10 +5,16 @@ import shader from "./cull.wgsl" with { type: "text" };
 
 export class Cull {
 	counter: GPUBuffer;
+	counterReadback: GPUBuffer;
 	bindGroup: GPUBindGroup;
 	contextBindGroup: GPUBindGroup;
 	pipeline: GPUComputePipeline;
-	indices: GPUBuffer;
+	indicesBuffer: GPUBuffer;
+	indicesReadback: GPUBuffer;
+
+	// output
+	count: number = 0;
+	indices: Uint32Array;
 
 	init(noise: Noise, mesh: Mesh) {
 		this.counter = device.createBuffer({
@@ -19,12 +25,22 @@ export class Cull {
 				GPUBufferUsage.COPY_DST,
 		});
 
-		this.indices = device.createBuffer({
-			size: Math.pow(gridSize / 8, 3),
+		this.counterReadback = device.createBuffer({
+			size: this.counter.size,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+
+		this.indicesBuffer = device.createBuffer({
+			size: Math.pow(gridSize / 8, 3) * 4,
 			usage:
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
 				GPUBufferUsage.COPY_DST,
+		});
+
+		this.indicesReadback = device.createBuffer({
+			size: this.indicesBuffer.size,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
 
 		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
@@ -54,7 +70,7 @@ export class Cull {
 				},
 				{
 					binding: 2,
-					resource: this.indices,
+					resource: this.indicesBuffer,
 				},
 			],
 		});
@@ -87,27 +103,46 @@ export class Cull {
 	}
 
 	async readback(): Promise<void> {
-		const readBuffer = device.createBuffer({
-			size: this.indices.size,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-		});
+		{
+			// first read how many indices we have
+			const encoder = device.createCommandEncoder();
+			encoder.copyBufferToBuffer(
+				this.counter,
+				0,
+				this.counterReadback,
+				0,
+				this.counter.size,
+			);
+			device.queue.submit([encoder.finish()]);
 
-		const encoder = device.createCommandEncoder();
-		encoder.copyBufferToBuffer(
-			this.indices,
-			0,
-			readBuffer,
-			0,
-			this.indices.size,
-		);
-		device.queue.submit([encoder.finish()]);
+			await this.counterReadback.mapAsync(GPUMapMode.READ);
+			const data = this.counterReadback.getMappedRange();
+			this.count = new Uint32Array(data)[0];
+			this.counterReadback.unmap();
 
-		await readBuffer.mapAsync(GPUMapMode.READ);
-		const data = readBuffer.getMappedRange();
-		const result = data.slice();
-		readBuffer.unmap();
-		readBuffer.destroy();
+			console.log("Index Count", this.count);
+		}
 
-		console.log(new Uint32Array(result));
+		await device.queue.onSubmittedWorkDone();
+
+		{
+			// now only read the indices we need
+			const encoder = device.createCommandEncoder();
+			encoder.copyBufferToBuffer(
+				this.indicesBuffer,
+				0,
+				this.indicesReadback,
+				0,
+				this.count * 4,
+			);
+			device.queue.submit([encoder.finish()]);
+
+			await this.indicesReadback.mapAsync(GPUMapMode.READ);
+			const data = this.indicesReadback.getMappedRange();
+			this.indices = new Uint32Array(data.slice());
+			this.indicesReadback.unmap();
+
+			console.log("Indices", this.indices);
+		}
 	}
 }
