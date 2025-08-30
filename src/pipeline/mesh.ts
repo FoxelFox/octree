@@ -11,8 +11,11 @@ export class Mesh {
 
 	init(noise: Noise) {
 		const sSize = gridSize / 8;
-		const maxMeshCount = sSize * sSize * sSize * 6;
-		const maxMeshSize = 384 * 16 + 4 + 12;
+		const maxMeshCount = sSize * sSize * sSize;
+		const maxMeshSize =
+			2048 * 16 // vertices
+			+ 4       // vertexCount
+			+ 12;     // padding
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,

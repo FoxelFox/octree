@@ -33,7 +33,7 @@ export class Cull {
 		});
 
 		this.indicesBuffer = device.createBuffer({
-			size: Math.pow(gridSize / 8, 3) * 4 * 6,
+			size: Math.pow(gridSize / 8, 3) * 4,
 			usage:
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
@@ -133,43 +133,39 @@ export class Cull {
 		// Wait a frame to ensure GPU work is submitted
 		await new Promise(resolve => requestAnimationFrame(resolve));
 
-		// Read counter
-		const counterEncoder = device.createCommandEncoder();
-		counterEncoder.copyBufferToBuffer(
+		// Atomically copy both counter and indices in the same submission
+		const encoder = device.createCommandEncoder();
+		encoder.copyBufferToBuffer(
 			this.counter,
 			0,
 			this.counterReadback,
 			0,
 			this.counter.size,
 		);
-		device.queue.submit([counterEncoder.finish()]);
+		encoder.copyBufferToBuffer(
+			this.indicesBuffer,
+			0,
+			this.indicesReadback,
+			0,
+			this.indicesBuffer.size,
+		);
+		device.queue.submit([encoder.finish()]);
 
+		// Read counter first
 		await this.counterReadback.mapAsync(GPUMapMode.READ);
 		const counterData = this.counterReadback.getMappedRange();
 		const newCount = new Uint32Array(counterData)[0];
 		this.counterReadback.unmap();
 
-		// Only update if count changed significantly or first time
-		//if (Math.abs(newCount - this.count) > 10 || this.count === 0) {
-		this.count = newCount;
-
-		// Read indices
-		const indicesEncoder = device.createCommandEncoder();
-		const readSize = Math.min(this.count * 4, this.indicesBuffer.size);
-		indicesEncoder.copyBufferToBuffer(
-			this.indicesBuffer,
-			0,
-			this.indicesReadback,
-			0,
-			readSize,
-		);
-		device.queue.submit([indicesEncoder.finish()]);
-
+		// Read indices using the count that was valid when buffers were copied
 		await this.indicesReadback.mapAsync(GPUMapMode.READ);
 		const indicesData = this.indicesReadback.getMappedRange();
+		const readSize = Math.min(newCount * 4, this.indicesBuffer.size);
 		this.indices = new Uint32Array(indicesData.slice(0, readSize));
 		this.indicesReadback.unmap();
-		//}
+
+		// Update count last, after we've used the consistent value
+		this.count = newCount;
 	}
 
 	async readback(): Promise<void> {
