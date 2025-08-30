@@ -1,23 +1,23 @@
-import {canvas, context, contextUniform, device, gridSize} from "../index";
-import shader from "./block.wgsl" with {type: "text"};
-import {Mesh} from "./mesh";
-import {RenderTimer} from "./timing";
+import { canvas, context, contextUniform, device, gridSize } from "../index";
+import shader from "./block.wgsl" with { type: "text" };
+import { Cull } from "./cull";
+import { Mesh } from "./mesh";
+import { RenderTimer } from "./timing";
 
 export class Block {
-
 	// input
 	mesh: Mesh;
+	cull: Cull;
 
-	pipeline: GPURenderPipeline
-	bindGroup: GPUBindGroup
-	uniformBindGroup: GPUBindGroup
+	pipeline: GPURenderPipeline;
+	bindGroup: GPUBindGroup;
+	uniformBindGroup: GPUBindGroup;
 	initialized: boolean;
 	timer: RenderTimer;
 	depthTexture: GPUTexture;
 
-
 	constructor() {
-		this.timer = new RenderTimer('block');
+		this.timer = new RenderTimer("block");
 		this.createDepthTexture();
 	}
 
@@ -27,36 +27,40 @@ export class Block {
 		}
 
 		this.depthTexture = device.createTexture({
-			size: {width: canvas.width, height: canvas.height},
-			format: 'depth24plus',
-			usage: GPUTextureUsage.RENDER_ATTACHMENT
+			size: { width: canvas.width, height: canvas.height },
+			format: "depth24plus",
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 	}
 
 	update(commandEncoder: GPUCommandEncoder) {
-
 		if (!this.initialized) {
 			this.init();
 		}
 
 		// Recreate depth texture if canvas size changed
-		if (this.depthTexture.width !== canvas.width || this.depthTexture.height !== canvas.height) {
+		if (
+			this.depthTexture.width !== canvas.width ||
+			this.depthTexture.height !== canvas.height
+		) {
 			this.createDepthTexture();
 		}
 
 		const pass = commandEncoder.beginRenderPass({
-			label: 'Block',
-			colorAttachments: [{
-				view: context.getCurrentTexture().createView(),
-				loadOp: 'clear',
-				storeOp: 'store',
-				clearValue: {r: 0, g: 0, b: 0, a: 0}
-			}],
+			label: "Block",
+			colorAttachments: [
+				{
+					view: context.getCurrentTexture().createView(),
+					loadOp: "clear",
+					storeOp: "store",
+					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+				},
+			],
 			depthStencilAttachment: {
 				view: this.depthTexture.createView(),
 				depthClearValue: 1.0,
-				depthLoadOp: 'clear',
-				depthStoreOp: 'store'
+				depthLoadOp: "clear",
+				depthStoreOp: "store",
 			},
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
@@ -67,10 +71,9 @@ export class Block {
 
 		// Draw instances for each mesh chunk
 		const sSize = gridSize / 8;
-		const maxInstances = sSize * sSize * sSize;
 
-		for (let i = 0; i < maxInstances; ++i) {
-			pass.drawIndirect(this.mesh.commands, i * 16);
+		for (let i = 0; i < this.cull.count; ++i) {
+			pass.drawIndirect(this.mesh.commands, this.cull.indices[i] * 16);
 		}
 
 		pass.end();
@@ -87,49 +90,42 @@ export class Block {
 	}
 
 	init() {
-
 		this.pipeline = device.createRenderPipeline({
-			label: 'Block Indices',
+			label: "Block Indices",
 			layout: "auto",
 			fragment: {
 				module: device.createShaderModule({
-					label: 'Block Fragment Shader',
+					label: "Block Fragment Shader",
 					code: shader,
 				}),
-				targets: [
-					{format: 'bgra8unorm'}
-				]
+				targets: [{ format: "bgra8unorm" }],
 			},
 			vertex: {
 				module: device.createShaderModule({
-					label: 'Block Vertex Shader',
-					code: shader
-				})
+					label: "Block Vertex Shader",
+					code: shader,
+				}),
 			},
 			primitive: {
-				topology: 'triangle-list'
+				topology: "triangle-list",
 			},
 			depthStencil: {
 				depthWriteEnabled: true,
-				depthCompare: 'less',
-				format: 'depth24plus'
-			}
+				depthCompare: "less",
+				format: "depth24plus",
+			},
 		});
 
 		this.bindGroup = device.createBindGroup({
-			label: 'Block',
+			label: "Block",
 			layout: this.pipeline.getBindGroupLayout(0),
-			entries: [
-				{binding: 0, resource: this.mesh.meshes}
-			]
+			entries: [{ binding: 0, resource: this.mesh.meshes }],
 		});
 
 		this.uniformBindGroup = device.createBindGroup({
-			label: 'Block BindGroup for Context',
+			label: "Block BindGroup for Context",
 			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [
-				{binding: 0, resource: contextUniform.uniformBuffer}
-			]
+			entries: [{ binding: 0, resource: contextUniform.uniformBuffer }],
 		});
 
 		this.initialized = true;

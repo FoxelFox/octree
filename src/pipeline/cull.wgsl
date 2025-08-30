@@ -6,7 +6,7 @@ struct Mesh {
 }
 
 // Input
-@group(0) @binding(1) var<storage, read> mesh: array<Mesh>;
+@group(0) @binding(1) var<storage, read> meshes: array<Mesh>;
 @group(1) @binding(0) var<uniform> context: Context;
 
 // Output
@@ -17,15 +17,13 @@ struct Mesh {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	// fuck you compiler
-	let c = &counter;
-	let m = mesh[0];
 	let co = context;
-	let i = indices[0];
 
-	// cull by viewport
 	let index = to1DSmall(id);
+	let mesh = meshes[index];
 
-
-
-
+	if (mesh.vertexCount > 0) {
+		let ptr = atomicAdd(&counter, 1u);
+		indices[ptr] = index;
+	}
 }

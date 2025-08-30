@@ -59,6 +59,7 @@ const block = new Block();
 const mesh = new Mesh();
 const cull = new Cull();
 block.mesh = mesh;
+block.cull = cull;
 post.noise = noise;
 post.distanceField = distanceField;
 
@@ -127,6 +128,7 @@ async function runOneTimeSetup() {
 	await device.queue.onSubmittedWorkDone();
 
 	await mesh.readback();
+	await cull.readback();
 
 	console.log("Setup complete.");
 }
