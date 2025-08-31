@@ -7,6 +7,7 @@ struct Mesh {
 
 // Input
 @group(0) @binding(1) var<storage, read> meshes: array<Mesh>;
+@group(0) @binding(3) var<storage, read> density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
 
 // Output
@@ -58,6 +59,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 	let co = context;
 	let index = to1DSmall(id);
 	let view_proj = co.perspective * co.view;
+	let x = density[0];
 
 
 	let mesh = meshes[index];

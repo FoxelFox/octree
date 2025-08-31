@@ -74,6 +74,10 @@ export class Cull {
 					binding: 2,
 					resource: this.indicesBuffer,
 				},
+				{
+					binding: 3,
+					resource: mesh.density,
+				},
 			],
 		});
 
