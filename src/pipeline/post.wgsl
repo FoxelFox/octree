@@ -976,7 +976,7 @@ fn main_fs(@builtin(position) pos: vec4<f32>) -> FragmentOutput {
   var world_pos = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
 
   // Camera position in world space
-  var camera_pos = (context.inverse_view * vec4<f32>(0.0, 0.0, 0.0, 1.0)).xyz;
+  var camera_pos = context.inverse_view[3].xyz;
 
   // Create ray direction
   let ray_dir = normalize(world_pos.xyz - camera_pos);
