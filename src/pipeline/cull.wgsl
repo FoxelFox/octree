@@ -52,14 +52,65 @@ fn test_aabb_frustum(aabb: AABB, view_proj: mat4x4<f32>) -> bool {
 	return false;
 }
 
+fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
+	// Extract camera position from inverse view matrix
+	let camera_pos = context.inverse_view[3].xyz;
+	
+	// Center of current block in world space
+	let block_center = vec3<f32>(block_pos) * 8.0 + vec3<f32>(4.0);
+
+	// Ray direction from block to camera
+	let ray_dir = normalize(camera_pos - block_center);
+
+	// Step size of one block (8x8x8 units)
+	let step_size = 8.0;
+
+	// Start from current block position
+	var current_pos = block_center;
+	var accumulated_density = 0u;
+	let density_threshold = 256u; // Half-filled blocks start occluding
+	
+	// Traverse toward camera
+	let max_steps = 32u; // Reasonable limit for performance
+	for (var step = 0u; step < max_steps; step++) {
+		// Move one block toward camera
+		current_pos += ray_dir * step_size;
+		
+		// Convert world position back to block coordinates
+		let test_block_pos = vec3<u32>(floor(current_pos / 8.0));
+		
+		// Check bounds
+		let grid_size = context.grid_size / COMPRESSION;
+		if (any(test_block_pos >= vec3<u32>(grid_size))) {
+			break;
+		}
+		
+		// Get density value for this block
+		let block_index = to1DSmall(test_block_pos);
+		let block_density = density[block_index];
+		
+		accumulated_density += block_density;
+		
+		// If we've accumulated enough solid voxels, consider this occluded
+		if (accumulated_density >= density_threshold) {
+			return true;
+		}
+		
+		// If we're close to camera, stop checking
+		let distance_to_camera = length(camera_pos - current_pos);
+		if (distance_to_camera < step_size) {
+			break;
+		}
+	}
+	
+	return false;
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
-	// fuck you compiler
-	let co = context;
 	let index = to1DSmall(id);
-	let view_proj = co.perspective * co.view;
-	let x = density[0];
+	let view_proj = context.perspective * context.view;
 
 
 	let mesh = meshes[index];
@@ -70,8 +121,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		let block_pos = vec3<u32>(id);
 		let aabb = get_block_aabb(block_pos);
 		if (test_aabb_frustum(aabb, view_proj)) {
-			let pointer = atomicAdd(&counter, 1u);
-			indices[pointer] = index;
+			// Density occlusion culling: check if path to camera is blocked
+			if (!test_density_occlusion(block_pos)) {
+				let pointer = atomicAdd(&counter, 1u);
+				indices[pointer] = index;
+			}
 		}
 	}
 
