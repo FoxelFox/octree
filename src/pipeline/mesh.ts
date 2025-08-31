@@ -8,6 +8,7 @@ export class Mesh {
 	contextBindGroup: GPUBindGroup;
 	meshes: GPUBuffer;
 	commands: GPUBuffer;
+	density: GPUBuffer;
 
 	init(noise: Noise) {
 		const sSize = gridSize / 8;
@@ -28,6 +29,13 @@ export class Mesh {
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
 				GPUBufferUsage.INDIRECT,
+		});
+
+		this.density = device.createBuffer({
+			size: 4 * maxMeshCount,
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_SRC
 		});
 
 		const shaderModule = device.createShaderModule({
@@ -58,6 +66,10 @@ export class Mesh {
 				{
 					binding: 2,
 					resource: {buffer: this.commands}, // Output
+				},
+				{
+					binding: 3,
+					resource: {buffer: this.density}, // Output
 				},
 			],
 		});

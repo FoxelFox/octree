@@ -19,6 +19,7 @@ struct Command {
 // Output
 @group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
 @group(0) @binding(2) var<storage, read_write> commands: array<Command>;
+@group(0) @binding(3) var<storage, read_write> density: array<u32>;
 
 
 // All 36 vertices for a cube's 12 triangles, with correct CCW winding.
@@ -59,6 +60,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	var mesh = Mesh();
 	var command = Command();
+	let index = to1DSmall(id);
 
 	for (var x = 0u; x < COMPRESSION; x++) {
 		for (var y = 0u; y < COMPRESSION; y++) {
@@ -66,6 +68,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 				let coord = vec3<u32>(x,y,z);
 				let voxel = getVoxel(coord + id * COMPRESSION);
 				if (voxel <= 0.0) {
+					density[index]++;
 					for (var n = 0; n < 6; n++) {
 						// for every neighbor face
 						let neighborPos = vec3<i32>(coord + id * COMPRESSION) + NEIGHBORS[n];
@@ -96,8 +99,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 			}
 		}
 	}
-
-	let index = to1DSmall(id);
 
 	meshes[index] = mesh;
 
