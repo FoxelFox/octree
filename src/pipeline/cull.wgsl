@@ -77,13 +77,15 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 		current_pos += ray_dir * step_size;
 		
 		// Convert world position back to block coordinates
-		let test_block_pos = vec3<u32>(floor(current_pos / 8.0));
+		let test_block_pos_f = floor(current_pos / 8.0);
 		
-		// Check bounds
+		// Check bounds before converting to unsigned
 		let grid_size = context.grid_size / COMPRESSION;
-		if (any(test_block_pos >= vec3<u32>(grid_size))) {
+		if (any(test_block_pos_f < vec3<f32>(0.0)) || any(test_block_pos_f >= vec3<f32>(f32(grid_size)))) {
 			break;
 		}
+		
+		let test_block_pos = vec3<u32>(test_block_pos_f);
 		
 		// Get density value for this block
 		let block_index = to1DSmall(test_block_pos);
