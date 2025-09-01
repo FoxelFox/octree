@@ -51,11 +51,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let camera_pos = context.inverse_view[3].xyz;
     
     // Light falloff parameters
-    let max_light_distance = 256.0; // Maximum distance for light effect
-    let falloff_start = 64.0; // Distance where falloff begins
+    let max_light_distance = 128.0; // Maximum distance for light effect
+    let falloff_start = 0.0; // Distance where falloff begins
     
     // Calculate distance attenuation
-    var light_intensity = 1.0;
+    var light_intensity = 0.7;
     if (distance > falloff_start) {
         let falloff_range = max_light_distance - falloff_start;
         let falloff_factor = max(0.0, (max_light_distance - distance) / falloff_range);

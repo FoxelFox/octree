@@ -53,7 +53,8 @@ fn vs_main(
 	var out: VertexOutput;
 	
 	// Generate color once per vertex based on mesh index
-	out.color = randomColor(instanceIndex);
+	//out.color = randomColor(instanceIndex);
+	out.color = vec3(1,1,1);
 	
 	// Get world position
 	let world_pos = meshes[instanceIndex].vertices[vertexIndex].xyz;
