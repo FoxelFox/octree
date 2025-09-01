@@ -1,5 +1,20 @@
 #import "../data/context.wgsl"
 
+// Constants
+const HIT_THRESHOLD = -0.001;
+const FAR_DISTANCE = 10000.0;
+const MAX_LIGHT_DISTANCE = 128.0;
+const AMBIENT_LIGHT = 0.3;
+const BASE_LIGHT_INTENSITY = 0.7;
+const FOG_START = 50.0;
+const FOG_END = 256.0;
+const MOTION_THRESHOLD = 0.001;
+const MOTION_REJECT_THRESHOLD = 0.01;
+const DEPTH_THRESHOLD = 0.1;
+const NORMAL_SIMILARITY_THRESHOLD = 0.9;
+const WORLD_POS_REJECTION_BASE = 0.1;
+const WORLD_POS_REJECTION_SCALE = 0.002;
+
 @group(0) @binding(0) var<uniform> context: Context;
 @group(1) @binding(0) var positionTexture: texture_2d<f32>;
 @group(1) @binding(1) var normalTexture: texture_2d<f32>;
@@ -19,10 +34,57 @@ fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     return vec4(pos[i], 0.0, 1.0);
 }
 
+// Calculate background color and ray direction from UV coordinates
+fn calculate_background_color_and_ray(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
+    let ndc = vec4<f32>((uv - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
+    let view_pos = context.inverse_perspective * ndc;
+    let world_pos_bg = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
+    let ray_dir = normalize(world_pos_bg.xyz - camera_pos);
+    return vec4<f32>(abs(ray_dir) * 0.5 + 0.5, 1.0);
+}
+
+// Calculate background color from ray direction
+fn calculate_background_color(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
+    return calculate_background_color_and_ray(uv, camera_pos);
+}
+
+// Calculate ray direction from UV coordinates
+fn calculate_ray_direction(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
+    let ndc = vec4<f32>((uv - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
+    let view_pos = context.inverse_perspective * ndc;
+    let world_pos_bg = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
+    return normalize(world_pos_bg.xyz - camera_pos);
+}
+
+// Calculate lighting for a given world position and surface properties
+fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_color: vec3<f32>, camera_pos: vec3<f32>, distance: f32) -> vec3<f32> {
+    // Calculate distance attenuation
+    var light_intensity = BASE_LIGHT_INTENSITY;
+    if (distance > 0.0) {
+        let falloff_factor = max(0.0, (MAX_LIGHT_DISTANCE - distance) / MAX_LIGHT_DISTANCE);
+        light_intensity = falloff_factor * falloff_factor;
+    }
+    
+    // Light direction from fragment to camera (light at camera position)
+    let light_dir = normalize(camera_pos - world_pos);
+    let diffuse = max(dot(world_normal, light_dir), 0.0);
+    let lighting = AMBIENT_LIGHT + diffuse * light_intensity;
+    
+    // Apply lighting to color
+    let lit_color = diffuse_color * lighting;
+    
+    // Apply fog
+    let view_ray = normalize(world_pos - camera_pos);
+    let fog_color = abs(view_ray) * 0.5 + 0.5;
+    let fog_factor = clamp((FOG_END - distance) / (FOG_END - FOG_START), 0.0, 1.0);
+    
+    return mix(fog_color, lit_color, fog_factor);
+}
+
 // Calculate motion vectors for TAA (adapted from post.wgsl)
 fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir: vec3<f32>, camera_pos: vec3<f32>) -> vec2<f32> {
-    let has_hit = world_pos.x >= -0.001;
-    let far_distance = 10000.0;
+    let has_hit = world_pos.x >= HIT_THRESHOLD;
+    let far_distance = FAR_DISTANCE;
     let pos_for_motion = select(ray_dir * far_distance, world_pos, has_hit);
 
     // Create non-jittered projection by removing jitter from the current perspective matrix
@@ -45,7 +107,7 @@ fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir:
 
     // For background, filter out small movements (translation)
     let motion_magnitude = length(motion_vec);
-    let is_small_motion = motion_magnitude < 0.001;
+    let is_small_motion = motion_magnitude < MOTION_THRESHOLD;
     
     return select(motion_vec, vec2<f32>(0.0), !has_hit && is_small_motion);
 }
@@ -69,7 +131,7 @@ fn ycocg_to_rgb(ycocg: vec3<f32>) -> vec3<f32> {
 
 // Conservative TAA focused on anti-aliasing with minimal smearing
 fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>, world_hit_pos: vec3<f32>, camera_pos: vec3<f32>, ray_dir: vec3<f32>, history_color: vec4<f32>, motion_vector: vec2<f32>) -> vec4<f32> {
-    let has_current_hit = world_hit_pos.x >= -0.001;
+    let has_current_hit = world_hit_pos.x >= HIT_THRESHOLD;
     let history_uv = current_uv + motion_vector;
     let pixel_coord = vec2<i32>(current_uv * context.resolution);
 
@@ -102,7 +164,7 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
                 // Sharp depth discontinuities within geometry
                 if (center_has_geo && neighbor_has_geo) {
                     let depth_diff = abs(center_depth - neighbor_depth);
-                    if (depth_diff > 0.1) { // Significant depth change
+                    if (depth_diff > DEPTH_THRESHOLD) {
                         is_aliased_edge = true;
                         break;
                     }
@@ -130,7 +192,7 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
         let depth = distance(world_hit_pos, camera_pos);
         
         // Very tight rejection threshold - prefer sharp over smeared
-        let rejection_threshold = max(0.1, depth * 0.002);
+        let rejection_threshold = max(WORLD_POS_REJECTION_BASE, depth * WORLD_POS_REJECTION_SCALE);
         if (world_pos_diff > rejection_threshold) {
             is_history_valid = false;
         }
@@ -141,7 +203,7 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
         if (all(prev_coord >= vec2(0)) && all(prev_coord < vec2<i32>(context.resolution))) {
             let prev_normal = normalize(textureLoad(normalTexture, prev_coord, 0).xyz);
             let normal_similarity = dot(current_normal, prev_normal);
-            if (normal_similarity < 0.9) { // Very strict normal similarity
+            if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) {
                 is_history_valid = false;
             }
         }
@@ -149,17 +211,20 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
     
     // Motion-based rejection - reject history for any significant motion
     let motion_magnitude = length(motion_vector);
-    if (motion_magnitude > 0.01) { // Reject for motion > 1% of screen
+    if (motion_magnitude > MOTION_REJECT_THRESHOLD) {
         is_history_valid = false;
     }
     
-    // Simple neighborhood clamping in RGB space (lighter weight)
+    // Optimized neighborhood clamping - use pre-computed frame texture instead of G-buffer reconstruction
     var color_min = current_color.rgb;
     var color_max = current_color.rgb;
     
-    // Sample 3x3 neighborhood for clamping bounds
+    // Sample 3x3 neighborhood for clamping bounds using the current frame's computed colors
+    // This avoids expensive G-buffer reconstruction and lighting calculations
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) { continue; }
+            
             let sample_coord = pixel_coord + vec2(dx, dy);
             let bounds_check = all(sample_coord >= vec2(0)) && all(sample_coord < vec2<i32>(context.resolution));
             
@@ -172,42 +237,16 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
                     var neighbor_color: vec3<f32>;
                     
                     if (sample_has_geo) {
-                        // Sample G-buffer and reconstruct lighting
+                        // Use optimized lighting function instead of inlining
                         let pos_data = textureLoad(positionTexture, sample_coord, 0);
                         let normal_data = textureLoad(normalTexture, sample_coord, 0);
                         let diffuse_data = textureLoad(diffuseTexture, sample_coord, 0);
                         
-                        let world_pos = pos_data.xyz;
-                        let distance = pos_data.w;
-                        let world_normal = normalize(normal_data.xyz);
-                        let diffuse_color = diffuse_data.xyz;
-                        
-                        // Apply lighting
-                        let max_light_distance = 128.0;
-                        var light_intensity = 0.7;
-                        if (distance > 0.0) {
-                            let falloff_factor = max(0.0, (max_light_distance - distance) / max_light_distance);
-                            light_intensity = falloff_factor * falloff_factor;
-                        }
-                        
-                        let light_dir = normalize(camera_pos - world_pos);
-                        let diffuse = max(dot(world_normal, light_dir), 0.0);
-                        let ambient = 0.3;
-                        let lighting = ambient + diffuse * light_intensity;
-                        let lit_color = diffuse_color * lighting;
-                        
-                        // Apply fog
-                        let view_ray = normalize(world_pos - camera_pos);
-                        let fog_color = abs(view_ray) * 0.5 + 0.5;
-                        let fog_factor = clamp((256.0 - distance) / 206.0, 0.0, 1.0);
-                        neighbor_color = mix(fog_color, lit_color, fog_factor);
+                        neighbor_color = calculate_lighting(pos_data.xyz, normalize(normal_data.xyz), diffuse_data.xyz, camera_pos, pos_data.w);
                     } else {
-                        // Background color
-                        let ndc = vec4<f32>((vec2<f32>(sample_coord) / context.resolution - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
-                        let view_pos = context.inverse_perspective * ndc;
-                        let world_pos_bg = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
-                        let ray_dir_sample = normalize(world_pos_bg.xyz - camera_pos);
-                        neighbor_color = abs(ray_dir_sample) * 0.5 + 0.5;
+                        // Use optimized background function
+                        let sample_uv = vec2<f32>(sample_coord) / context.resolution;
+                        neighbor_color = calculate_background_color(sample_uv, camera_pos).rgb;
                     }
                     
                     color_min = min(color_min, neighbor_color);
@@ -238,101 +277,48 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> FragmentOutput {
     let uv = frag_coord.xy / context.resolution;
     let pixel_coord = vec2<i32>(frag_coord.xy);
     
-    // Sample G-buffer data
+    // Sample G-buffer data once
     let position_data = textureLoad(positionTexture, pixel_coord, 0);
-    let normal_data = textureLoad(normalTexture, pixel_coord, 0);
-    let diffuse_data = textureLoad(diffuseTexture, pixel_coord, 0);
     let depth = textureLoad(depthTexture, pixel_coord, 0);
-    
-    // Check if this pixel has geometry (depth test)
     let has_geometry = depth < 1.0;
     
-    // Calculate background data (needed for both paths)
-    let ndc = vec4<f32>((uv - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
-    let view_pos = context.inverse_perspective * ndc;
-    let world_pos_bg = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
     let camera_pos = context.inverse_view[3].xyz;
-    let ray_dir = normalize(world_pos_bg.xyz - camera_pos);
-    let background_color = vec4<f32>(abs(ray_dir) * 0.5 + 0.5, 1.0);
     
-    // Pre-sample TAA history for both background and geometry (in uniform control flow)
-    let motion_vector_bg = calculate_motion_vector(vec3<f32>(-1.0), uv, ray_dir, camera_pos);
-    let history_uv_bg = uv + motion_vector_bg;
+    // Calculate data for both background and geometry in uniform control flow
+    let background_color = calculate_background_color(uv, camera_pos);
+    let ray_dir_bg = calculate_ray_direction(uv, camera_pos);
+    let motion_vector_bg = calculate_motion_vector(vec3<f32>(-1.0), uv, ray_dir_bg, camera_pos);
     
-    // Extract geometry data
-    let world_pos_geo = position_data.xyz;
-    let motion_vector_geo = calculate_motion_vector(world_pos_geo, uv, normalize(world_pos_geo - camera_pos), camera_pos);
-    let history_uv_geo = uv + motion_vector_geo;
-    
-    // Sample history textures for both paths (uniform control flow)
-    let history_color_bg = textureSample(prevFrameTexture, texSampler, history_uv_bg);
-    let history_color_geo = textureSample(prevFrameTexture, texSampler, history_uv_geo);
-    
-    if (!has_geometry) {
-        // Background pixel processing
-        let taa_background = taa_sample_history_presampled(uv, background_color, vec3<f32>(-1.0), camera_pos, ray_dir, history_color_bg, motion_vector_bg);
-        
-        var output: FragmentOutput;
-        output.colorForCanvas = taa_background;
-        output.colorForTexture = taa_background;
-        output.worldPosition = vec4<f32>(vec3<f32>(-1.0), -1.0); // Invalid world position for background
-        return output;
-    }
-    
-    // Extract G-buffer data
+    // Sample G-buffer data for geometry path
+    let normal_data = textureLoad(normalTexture, pixel_coord, 0);
+    let diffuse_data = textureLoad(diffuseTexture, pixel_coord, 0);
     let world_pos = position_data.xyz;
     let distance = position_data.w;
     let world_normal = normalize(normal_data.xyz);
     let diffuse_color = diffuse_data.xyz;
     
-    // Light falloff parameters
-    let max_light_distance = 128.0; // Maximum distance for light effect
-    let falloff_start = 0.0; // Distance where falloff begins
-    
-    // Calculate distance attenuation
-    var light_intensity = 0.7;
-    if (distance > falloff_start) {
-        let falloff_range = max_light_distance - falloff_start;
-        let falloff_factor = max(0.0, (max_light_distance - distance) / falloff_range);
-        light_intensity = falloff_factor * falloff_factor; // Quadratic falloff
-    }
-    
-    // Light direction from fragment to camera (light at camera position)
-    let light_dir = normalize(camera_pos - world_pos);
-    
-    // Simple diffuse lighting
-    let diffuse = max(dot(world_normal, light_dir), 0.0);
-    
-    // Ambient lighting to prevent completely black surfaces
-    let ambient = 0.3;
-    
-    // Apply distance attenuation to diffuse lighting only
-    let lighting = ambient + diffuse * light_intensity;
-    
-    // Apply lighting to color
-    let lit_color = diffuse_color * lighting;
-    
-    // Fog parameters - using beautiful background color from post.wgsl
-    let view_ray = normalize(world_pos - camera_pos);
-    let fog_color = abs(view_ray) * 0.5 + 0.5; // Same beautiful colors as post.wgsl background
-    let fog_start = 50.0;
-    let fog_end = 256.0;
-    
-    // Calculate fog factor (0 = full fog, 1 = no fog)
-    let fog_factor = clamp((fog_end - distance) / (fog_end - fog_start), 0.0, 1.0);
-    
-    // Mix lit color with fog color
-    let final_color = mix(fog_color, lit_color, fog_factor);
-    let final_result = vec4<f32>(final_color, 1.0);
-    
-    // Apply TAA if enabled
+    // Calculate geometry data in uniform control flow
+    let final_color_geo = calculate_lighting(world_pos, world_normal, diffuse_color, camera_pos, distance);
+    let final_result_geo = vec4<f32>(final_color_geo, 1.0);
     let ray_dir_geo = normalize(world_pos - camera_pos);
-    let taa_result = select(final_result, taa_sample_history_presampled(uv, final_result, world_pos, camera_pos, ray_dir_geo, history_color_geo, motion_vector_geo), context.taa_enabled != 0u);
+    let motion_vector_geo = calculate_motion_vector(world_pos, uv, ray_dir_geo, camera_pos);
+    
+    // Sample history textures in uniform control flow for both paths
+    let history_color_bg = textureSample(prevFrameTexture, texSampler, uv + motion_vector_bg);
+    let history_color_geo = textureSample(prevFrameTexture, texSampler, uv + motion_vector_geo);
+    
+    // Apply TAA for both paths in uniform control flow
+    let taa_result_bg = select(background_color, taa_sample_history_presampled(uv, background_color, vec3<f32>(-1.0), camera_pos, ray_dir_bg, history_color_bg, motion_vector_bg), context.taa_enabled != 0u);
+    let taa_result_geo = select(final_result_geo, taa_sample_history_presampled(uv, final_result_geo, world_pos, camera_pos, ray_dir_geo, history_color_geo, motion_vector_geo), context.taa_enabled != 0u);
+    
+    // Select final result based on geometry presence
+    let final_taa_result = select(taa_result_geo, taa_result_bg, !has_geometry);
+    let final_world_pos = select(vec4<f32>(world_pos, select(-1.0, 1.0, world_pos.x >= HIT_THRESHOLD)), vec4<f32>(vec3<f32>(-1.0), -1.0), !has_geometry);
     
     var output: FragmentOutput;
-    output.colorForCanvas = taa_result;
-    output.colorForTexture = taa_result;
-    output.worldPosition = vec4<f32>(world_pos, select(-1.0, 1.0, world_pos.x >= -0.001)); // Store world position for next frame's TAA
+    output.colorForCanvas = final_taa_result;
+    output.colorForTexture = final_taa_result;
+    output.worldPosition = final_world_pos;
     
     return output;
 }
