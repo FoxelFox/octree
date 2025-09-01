@@ -52,7 +52,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     
     // Light falloff parameters
     let max_light_distance = 256.0; // Maximum distance for light effect
-    let falloff_start = 20.0; // Distance where falloff begins
+    let falloff_start = 64.0; // Distance where falloff begins
     
     // Calculate distance attenuation
     var light_intensity = 1.0;
@@ -81,7 +81,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let view_ray = normalize(world_pos - camera_pos);
     let fog_color = abs(view_ray) * 0.5 + 0.5; // Same beautiful colors as post.wgsl background
     let fog_start = 50.0;
-    let fog_end = 600.0;
+    let fog_end = 256.0;
     
     // Calculate fog factor (0 = full fog, 1 = no fog)
     let fog_factor = clamp((fog_end - distance) / (fog_end - fog_start), 0.0, 1.0);
