@@ -27,8 +27,8 @@ fn calculate_motion_vector(world_pos: vec3<f32>, current_uv: vec2<f32>, ray_dir:
 
     // Create non-jittered projection by removing jitter from the current perspective matrix
     var unjittered_perspective = context.perspective;
-    unjittered_perspective[2][0] -= context.jitter_offset.x * 2.0; // Remove jitter from x offset
-    unjittered_perspective[2][1] -= context.jitter_offset.y * 2.0; // Remove jitter from y offset
+    unjittered_perspective[2][0] -= context.jitter_offset.x; // Remove jitter from x offset
+    unjittered_perspective[2][1] -= context.jitter_offset.y; // Remove jitter from y offset
     
     // Transform world position to current frame's clip space (without jitter)
     let current_view_proj = unjittered_perspective * context.view;
@@ -220,11 +220,10 @@ fn taa_sample_history_presampled(current_uv: vec2<f32>, current_color: vec4<f32>
     // Tight clamping to prevent color bleeding
     let clamped_history = vec4<f32>(clamp(history_color.rgb, color_min, color_max), history_color.a);
     
-    // Extremely conservative blending - prioritize sharpness over smoothness
-    let blend_factor = select(0.8, 0.01, is_history_valid); // 1% blend when valid, 80% when invalid
-    
-    // Only blend if history is valid, otherwise return current color
-    return select(current_color, mix(history_color, clamped_history, blend_factor), is_history_valid);
+    // More aggressive history usage for better temporal stability
+    let blend_factor = select(0.95, 0.99, is_history_valid); // 99% history when valid, 50% when invalid
+
+    return mix(current_color, clamped_history, blend_factor);
 }
 
 // Output structure for TAA
