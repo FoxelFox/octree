@@ -14,50 +14,50 @@ export class Block {
 	gBufferPipeline: GPURenderPipeline;
 	gBufferBindGroup: GPUBindGroup;
 	gBufferUniformBindGroup: GPUBindGroup;
-	
+
 	// Deferred lighting pass
 	deferredPipeline: GPURenderPipeline;
 	deferredBindGroup: GPUBindGroup;
 	deferredUniformBindGroup: GPUBindGroup;
 	deferredTaaBindGroupA: GPUBindGroup;
 	deferredTaaBindGroupB: GPUBindGroup;
-	
+
 	initialized: boolean;
 	timer: RenderTimer;
-	
+
 	// G-buffer textures
 	positionTexture: GPUTexture;
 	normalTexture: GPUTexture;
 	diffuseTexture: GPUTexture;
 	depthTexture: GPUTexture;
-	
+
 	// TAA textures (ping-pong buffers)
 	prevFrameTextureA: GPUTexture;
 	prevFrameTextureB: GPUTexture;
 	prevWorldPosTextureA: GPUTexture;
 	prevWorldPosTextureB: GPUTexture;
 	sampler: GPUSampler;
-	
+
 	// Current frame index for ping-pong
 	frameIndex: number = 0;
-	
+
 	// Clean ping-pong approach with alternating bind groups
 	getCurrentFrameTexture() {
 		return this.frameIndex % 2 === 0 ? this.prevFrameTextureA : this.prevFrameTextureB;
 	}
-	
+
 	getPreviousFrameTexture() {
 		return this.frameIndex % 2 === 0 ? this.prevFrameTextureB : this.prevFrameTextureA;
 	}
-	
+
 	getCurrentWorldPosTexture() {
 		return this.frameIndex % 2 === 0 ? this.prevWorldPosTextureA : this.prevWorldPosTextureB;
 	}
-	
+
 	getPreviousWorldPosTexture() {
 		return this.frameIndex % 2 === 0 ? this.prevWorldPosTextureB : this.prevWorldPosTextureA;
 	}
-	
+
 	getCurrentTaaBindGroup() {
 		// When writing to A (even frame), read from B (use bind group B)
 		// When writing to B (odd frame), read from A (use bind group A) 
@@ -86,14 +86,14 @@ export class Block {
 		if (this.prevWorldPosTextureB) this.prevWorldPosTextureB.destroy();
 
 		const size = {width: canvas.width, height: canvas.height};
-		
+
 		// Previous frame color textures (ping-pong buffers)
 		this.prevFrameTextureA = device.createTexture({
 			size,
 			format: "bgra8unorm",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		
+
 		this.prevFrameTextureB = device.createTexture({
 			size,
 			format: "bgra8unorm",
@@ -106,7 +106,7 @@ export class Block {
 			format: "rgba32float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
-		
+
 		this.prevWorldPosTextureB = device.createTexture({
 			size,
 			format: "rgba32float",
@@ -122,7 +122,7 @@ export class Block {
 		if (this.depthTexture) this.depthTexture.destroy();
 
 		const size = {width: canvas.width, height: canvas.height};
-		
+
 		// Position texture (RGBA32Float for high precision world positions)
 		this.positionTexture = device.createTexture({
 			size,
@@ -133,7 +133,7 @@ export class Block {
 		// Normal texture (RGBA16Float is sufficient for normals)
 		this.normalTexture = device.createTexture({
 			size,
-			format: "rgba16float", 
+			format: "rgba16float",
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
@@ -168,7 +168,7 @@ export class Block {
 			this.createDeferredBindGroup();
 			this.createDeferredTaaBindGroups();
 		}
-		
+
 		// TAA bind groups are static, no need to recreate each frame
 
 		// Pass 1: G-buffer generation
@@ -238,7 +238,7 @@ export class Block {
 				{
 					view: this.getCurrentWorldPosTexture().createView(),
 					loadOp: this.frameIndex === 0 ? "clear" : "load",  // Clear first frame, load subsequent frames
-					storeOp: "store", 
+					storeOp: "store",
 					clearValue: {r: 0, g: 0, b: 0, a: 0},
 				},
 			],
@@ -290,7 +290,7 @@ export class Block {
 				{binding: 2, resource: this.prevWorldPosTextureA.createView()},
 			],
 		});
-		
+
 		// Bind group B: reads from texture B (when we write to texture A)
 		this.deferredTaaBindGroupB = device.createBindGroup({
 			label: "Deferred TAA Textures B",
@@ -327,7 +327,7 @@ export class Block {
 			},
 			primitive: {
 				topology: "triangle-list",
-				cullMode: "back"
+				cullMode: "front"
 			},
 			depthStencil: {
 				depthWriteEnabled: true,
@@ -353,7 +353,7 @@ export class Block {
 			},
 			vertex: {
 				module: device.createShaderModule({
-					label: "Block Deferred Vertex Shader", 
+					label: "Block Deferred Vertex Shader",
 					code: deferredShader,
 				}),
 			},

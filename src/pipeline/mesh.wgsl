@@ -22,37 +22,286 @@ struct Command {
 @group(0) @binding(3) var<storage, read_write> density: array<u32>;
 
 
-// All 36 vertices for a cube's 12 triangles, with correct CCW winding.
-const CUBE_TRIANGLE_VERTICES = array<vec3<u32>, 36>(
-	// +X (right)
-	vec3(1, 0, 1), vec3(1, 0, 0), vec3(1, 1, 0),
-	vec3(1, 0, 1), vec3(1, 1, 0), vec3(1, 1, 1),
-	// -X (left)
-	vec3(0, 0, 0), vec3(0, 0, 1), vec3(0, 1, 1),
-	vec3(0, 0, 0), vec3(0, 1, 1), vec3(0, 1, 0),
-	// +Y (top)
-	vec3(0, 1, 1), vec3(1, 1, 0), vec3(0, 1, 0),
-	vec3(0, 1, 1), vec3(1, 1, 1), vec3(1, 1, 0),
-	// -Y (bottom)
-	vec3(0, 0, 0), vec3(1, 0, 1), vec3(0, 0, 1),
-	vec3(0, 0, 0), vec3(1, 0, 0), vec3(1, 0, 1),
-	// +Z (front)
-	vec3(0, 0, 1), vec3(1, 1, 1), vec3(0, 1, 1),
-	vec3(0, 0, 1), vec3(1, 0, 1), vec3(1, 1, 1),
-	// -Z (back)
-	vec3(1, 0, 0), vec3(0, 1, 0), vec3(1, 1, 0),
-	vec3(1, 0, 0), vec3(0, 0, 0), vec3(0, 1, 0)
+// Marching cubes edge table - which edges to interpolate for each configuration
+const EDGE_TABLE = array<u32, 256>(
+	0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c,
+	0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03, 0xe09, 0xf00,
+	0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c,
+	0x99c, 0x895, 0xb9f, 0xa96, 0xd9a, 0xc93, 0xf99, 0xe90,
+	0x230, 0x339, 0x33, 0x13a, 0x636, 0x73f, 0x435, 0x53c,
+	0xa3c, 0xb35, 0x83f, 0x936, 0xe3a, 0xf33, 0xc39, 0xd30,
+	0x3a0, 0x2a9, 0x1a3, 0xaa, 0x7a6, 0x6af, 0x5a5, 0x4ac,
+	0xbac, 0xaa5, 0x9af, 0x8a6, 0xfaa, 0xea3, 0xda9, 0xca0,
+	0x460, 0x569, 0x663, 0x76a, 0x66, 0x16f, 0x265, 0x36c,
+	0xc6c, 0xd65, 0xe6f, 0xf66, 0x86a, 0x963, 0xa69, 0xb60,
+	0x5f0, 0x4f9, 0x7f3, 0x6fa, 0x1f6, 0xff, 0x3f5, 0x2fc,
+	0xdfc, 0xcf5, 0xfff, 0xef6, 0x9fa, 0x8f3, 0xbf9, 0xaf0,
+	0x650, 0x759, 0x453, 0x55a, 0x256, 0x35f, 0x55, 0x15c,
+	0xe5c, 0xf55, 0xc5f, 0xd56, 0xa5a, 0xb53, 0x859, 0x950,
+	0x7c0, 0x6c9, 0x5c3, 0x4ca, 0x3c6, 0x2cf, 0x1c5, 0xcc,
+	0xfcc, 0xec5, 0xdcf, 0xcc6, 0xbca, 0xac3, 0x9c9, 0x8c0,
+	0x8c0, 0x9c9, 0xac3, 0xbca, 0xcc6, 0xdcf, 0xec5, 0xfcc,
+	0xcc, 0x1c5, 0x2cf, 0x3c6, 0x4ca, 0x5c3, 0x6c9, 0x7c0,
+	0x950, 0x859, 0xb53, 0xa5a, 0xd56, 0xc5f, 0xf55, 0xe5c,
+	0x15c, 0x55, 0x35f, 0x256, 0x55a, 0x453, 0x759, 0x650,
+	0xaf0, 0xbf9, 0x8f3, 0x9fa, 0xef6, 0xfff, 0xcf5, 0xdfc,
+	0x2fc, 0x3f5, 0xff, 0x1f6, 0x6fa, 0x7f3, 0x4f9, 0x5f0,
+	0xb60, 0xa69, 0x963, 0x86a, 0xf66, 0xe6f, 0xd65, 0xc6c,
+	0x36c, 0x265, 0x16f, 0x66, 0x76a, 0x663, 0x569, 0x460,
+	0xca0, 0xda9, 0xea3, 0xfaa, 0x8a6, 0x9af, 0xaa5, 0xbac,
+	0x4ac, 0x5a5, 0x6af, 0x7a6, 0xaa, 0x1a3, 0x2a9, 0x3a0,
+	0xd30, 0xc39, 0xf33, 0xe3a, 0x936, 0x83f, 0xb35, 0xa3c,
+	0x53c, 0x435, 0x73f, 0x636, 0x13a, 0x33, 0x339, 0x230,
+	0xe90, 0xf99, 0xc93, 0xd9a, 0xa96, 0xb9f, 0x895, 0x99c,
+	0x69c, 0x795, 0x49f, 0x596, 0x29a, 0x393, 0x99, 0x190,
+	0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
+	0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0
 );
 
-const NEIGHBORS = array<vec3<i32>, 6>(
-	vec3(1, 0, 0), vec3(-1, 0, 0),
-	vec3(0, 1, 0), vec3(0, -1, 0),
-	vec3(0, 0, 1), vec3(0, 0, -1)
+// Complete marching cubes triangle table - all 256 configurations
+const TRIANGLE_TABLE = array<array<i32, 16>, 192>(
+	array(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 8, 3, 9, 8, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 2, 10, 0, 2, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 8, 3, 2, 10, 8, 10, 9, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 11, 2, 8, 11, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 9, 0, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 11, 2, 1, 9, 11, 9, 8, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 10, 1, 11, 10, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 10, 1, 0, 8, 10, 8, 11, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 9, 0, 3, 11, 9, 11, 10, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 3, 0, 7, 3, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 1, 9, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 1, 9, 4, 7, 1, 7, 3, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 4, 7, 3, 0, 4, 1, 2, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 2, 10, 9, 0, 2, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 10, 9, 2, 9, 7, 2, 7, 3, 7, 9, 4, -1, -1, -1, -1),
+	array(8, 4, 7, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 4, 7, 11, 2, 4, 2, 0, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 0, 1, 8, 4, 7, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 7, 11, 9, 4, 11, 9, 11, 2, 9, 2, 1, -1, -1, -1, -1),
+	array(3, 10, 1, 3, 11, 10, 7, 8, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 11, 10, 1, 4, 11, 1, 0, 4, 7, 11, 4, -1, -1, -1, -1),
+	array(4, 7, 8, 9, 0, 11, 9, 11, 10, 11, 0, 3, -1, -1, -1, -1),
+	array(4, 7, 11, 4, 11, 9, 9, 11, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 5, 4, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 5, 4, 1, 5, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 5, 4, 8, 3, 5, 3, 1, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 0, 8, 1, 2, 10, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 2, 10, 5, 4, 2, 4, 0, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 10, 5, 3, 2, 5, 3, 5, 4, 3, 4, 8, -1, -1, -1, -1),
+	array(9, 5, 4, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 11, 2, 0, 8, 11, 4, 9, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 5, 4, 0, 1, 5, 2, 3, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 1, 5, 2, 5, 8, 2, 8, 11, 4, 8, 5, -1, -1, -1, -1),
+	array(10, 3, 11, 10, 1, 3, 9, 5, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 9, 5, 0, 8, 1, 8, 10, 1, 8, 11, 10, -1, -1, -1, -1),
+	array(5, 4, 0, 5, 0, 11, 5, 11, 10, 11, 0, 3, -1, -1, -1, -1),
+	array(5, 4, 8, 5, 8, 10, 10, 8, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 7, 8, 5, 7, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 3, 0, 9, 5, 3, 5, 7, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 7, 8, 0, 1, 7, 1, 5, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 7, 8, 9, 5, 7, 10, 1, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 1, 2, 9, 5, 0, 5, 3, 0, 5, 7, 3, -1, -1, -1, -1),
+	array(8, 0, 2, 8, 2, 5, 8, 5, 7, 10, 5, 2, -1, -1, -1, -1),
+	array(2, 10, 5, 2, 5, 3, 3, 5, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 9, 5, 7, 8, 9, 3, 11, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 5, 7, 9, 7, 2, 9, 2, 0, 2, 7, 11, -1, -1, -1, -1),
+	array(2, 3, 11, 0, 1, 8, 1, 7, 8, 1, 5, 7, -1, -1, -1, -1),
+	array(11, 2, 1, 11, 1, 7, 7, 1, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 5, 8, 8, 5, 7, 10, 1, 3, 10, 3, 11, -1, -1, -1, -1),
+	array(5, 7, 0, 5, 0, 9, 7, 11, 0, 1, 0, 10, 11, 10, 0, -1),
+	array(11, 10, 0, 11, 0, 3, 10, 5, 0, 8, 0, 7, 5, 7, 0, -1),
+	array(11, 10, 5, 7, 11, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 0, 1, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 8, 3, 1, 9, 8, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 6, 5, 2, 6, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 6, 5, 1, 2, 6, 3, 0, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 6, 5, 9, 0, 6, 0, 2, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 9, 8, 5, 8, 2, 5, 2, 6, 3, 2, 8, -1, -1, -1, -1),
+	array(2, 3, 11, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 0, 8, 11, 2, 0, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 1, 9, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 10, 6, 1, 9, 2, 9, 11, 2, 9, 8, 11, -1, -1, -1, -1),
+	array(6, 3, 11, 6, 5, 3, 5, 1, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 11, 0, 11, 5, 0, 5, 1, 5, 11, 6, -1, -1, -1, -1),
+	array(3, 11, 6, 0, 3, 6, 0, 6, 5, 0, 5, 9, -1, -1, -1, -1),
+	array(6, 5, 9, 6, 9, 11, 11, 9, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 10, 6, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 3, 0, 4, 7, 3, 6, 5, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 9, 0, 5, 10, 6, 8, 4, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 6, 5, 1, 9, 7, 1, 7, 3, 7, 9, 4, -1, -1, -1, -1),
+	array(6, 1, 2, 6, 5, 1, 4, 7, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 5, 5, 2, 6, 3, 0, 4, 3, 4, 7, -1, -1, -1, -1),
+	array(8, 4, 7, 9, 0, 5, 0, 6, 5, 0, 2, 6, -1, -1, -1, -1),
+	array(7, 3, 9, 7, 9, 4, 3, 2, 9, 5, 9, 6, 2, 6, 9, -1),
+	array(3, 11, 2, 7, 8, 4, 10, 6, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 10, 6, 4, 7, 2, 4, 2, 0, 2, 7, 11, -1, -1, -1, -1),
+	array(0, 1, 9, 4, 7, 8, 2, 3, 11, 5, 10, 6, -1, -1, -1, -1),
+	array(9, 2, 1, 9, 11, 2, 9, 4, 11, 7, 11, 4, 5, 10, 6, -1),
+	array(8, 4, 7, 3, 11, 5, 3, 5, 1, 5, 11, 6, -1, -1, -1, -1),
+	array(5, 1, 11, 5, 11, 6, 1, 0, 11, 7, 11, 4, 0, 4, 11, -1),
+	array(0, 5, 9, 0, 6, 5, 0, 3, 6, 11, 6, 3, 8, 4, 7, -1),
+	array(6, 5, 9, 6, 9, 11, 4, 7, 9, 7, 11, 9, -1, -1, -1, -1),
+	array(10, 4, 9, 6, 4, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 10, 6, 4, 9, 10, 0, 8, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 0, 1, 10, 6, 0, 6, 4, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 3, 1, 8, 1, 6, 8, 6, 4, 6, 1, 10, -1, -1, -1, -1),
+	array(1, 4, 9, 1, 2, 4, 2, 6, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 0, 8, 1, 2, 9, 2, 4, 9, 2, 6, 4, -1, -1, -1, -1),
+	array(0, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 3, 2, 8, 2, 4, 4, 2, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 4, 9, 10, 6, 4, 11, 2, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 2, 2, 8, 11, 4, 9, 10, 4, 10, 6, -1, -1, -1, -1),
+	array(3, 11, 2, 0, 1, 6, 0, 6, 4, 6, 1, 10, -1, -1, -1, -1),
+	array(6, 4, 1, 6, 1, 10, 4, 8, 1, 2, 1, 11, 8, 11, 1, -1),
+	array(9, 6, 4, 9, 3, 6, 9, 1, 3, 11, 6, 3, -1, -1, -1, -1),
+	array(8, 11, 1, 8, 1, 0, 11, 6, 1, 9, 1, 4, 6, 4, 1, -1),
+	array(3, 11, 6, 3, 6, 0, 0, 6, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(6, 4, 8, 11, 6, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 10, 6, 7, 8, 10, 8, 9, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 7, 3, 0, 10, 7, 0, 9, 10, 6, 7, 10, -1, -1, -1, -1),
+	array(10, 6, 7, 1, 10, 7, 1, 7, 8, 1, 8, 0, -1, -1, -1, -1),
+	array(10, 6, 7, 10, 7, 1, 1, 7, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 6, 1, 6, 8, 1, 8, 9, 8, 6, 7, -1, -1, -1, -1),
+	array(2, 6, 9, 2, 9, 1, 6, 7, 9, 0, 9, 3, 7, 3, 9, -1),
+	array(7, 8, 0, 7, 0, 6, 6, 0, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 3, 2, 6, 7, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 3, 11, 10, 6, 8, 10, 8, 9, 8, 6, 7, -1, -1, -1, -1),
+	array(2, 0, 7, 2, 7, 11, 0, 9, 7, 6, 7, 10, 9, 10, 7, -1),
+	array(1, 8, 0, 1, 7, 8, 1, 10, 7, 6, 7, 10, 2, 3, 11, -1),
+	array(11, 2, 1, 11, 1, 7, 10, 6, 1, 6, 7, 1, -1, -1, -1, -1),
+	array(8, 9, 6, 8, 6, 7, 9, 1, 6, 11, 6, 3, 1, 3, 6, -1),
+	array(0, 9, 1, 11, 6, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 8, 0, 7, 0, 6, 3, 11, 0, 11, 6, 0, -1, -1, -1, -1),
+	array(7, 11, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 0, 8, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 1, 9, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 1, 9, 8, 3, 1, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 1, 2, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, 3, 0, 8, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 9, 0, 2, 10, 9, 6, 11, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(6, 11, 7, 2, 10, 3, 10, 8, 3, 10, 9, 8, -1, -1, -1, -1),
+	array(7, 2, 3, 6, 2, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(7, 0, 8, 7, 6, 0, 6, 2, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 7, 6, 2, 3, 7, 0, 1, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 6, 2, 1, 8, 6, 1, 9, 8, 8, 7, 6, -1, -1, -1, -1),
+	array(10, 7, 6, 10, 1, 7, 1, 3, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 7, 6, 1, 7, 10, 1, 8, 7, 1, 0, 8, -1, -1, -1, -1),
+	array(0, 3, 7, 0, 7, 10, 0, 10, 9, 6, 10, 7, -1, -1, -1, -1),
+	array(7, 6, 10, 7, 10, 8, 8, 10, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(6, 8, 4, 11, 8, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 6, 11, 3, 0, 6, 0, 4, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 6, 11, 8, 4, 6, 9, 0, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 4, 6, 9, 6, 3, 9, 3, 1, 11, 3, 6, -1, -1, -1, -1),
+	array(6, 8, 4, 6, 11, 8, 2, 10, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, 3, 0, 11, 0, 6, 11, 0, 4, 6, -1, -1, -1, -1),
+	array(4, 11, 8, 4, 6, 11, 0, 2, 9, 2, 10, 9, -1, -1, -1, -1),
+	array(10, 9, 3, 10, 3, 2, 9, 4, 3, 11, 3, 6, 4, 6, 3, -1),
+	array(8, 2, 3, 8, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 4, 2, 4, 6, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 9, 0, 2, 3, 4, 2, 4, 6, 4, 3, 8, -1, -1, -1, -1),
+	array(1, 9, 4, 1, 4, 2, 2, 4, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 1, 3, 8, 6, 1, 8, 4, 6, 6, 10, 1, -1, -1, -1, -1),
+	array(10, 1, 0, 10, 0, 6, 6, 0, 4, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 6, 3, 4, 3, 8, 6, 10, 3, 0, 3, 9, 10, 9, 3, -1),
+	array(10, 9, 4, 6, 10, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 9, 5, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, 4, 9, 5, 11, 7, 6, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 0, 1, 5, 4, 0, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 7, 6, 8, 3, 4, 3, 5, 4, 3, 1, 5, -1, -1, -1, -1),
+	array(9, 5, 4, 10, 1, 2, 7, 6, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(6, 11, 7, 1, 2, 10, 0, 8, 3, 4, 9, 5, -1, -1, -1, -1),
+	array(7, 6, 11, 5, 4, 10, 4, 2, 10, 4, 0, 2, -1, -1, -1, -1),
+	array(3, 4, 8, 3, 5, 4, 3, 2, 5, 10, 5, 2, 11, 7, 6, -1),
+	array(7, 2, 3, 7, 6, 2, 5, 4, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 5, 4, 0, 8, 6, 0, 6, 2, 6, 8, 7, -1, -1, -1, -1),
+	array(3, 6, 2, 3, 7, 6, 1, 5, 0, 5, 4, 0, -1, -1, -1, -1),
+	array(6, 2, 8, 6, 8, 7, 2, 1, 8, 4, 8, 5, 1, 5, 8, -1),
+	array(9, 5, 4, 10, 1, 6, 1, 7, 6, 1, 3, 7, -1, -1, -1, -1),
+	array(1, 6, 10, 1, 7, 6, 1, 0, 7, 8, 7, 0, 9, 5, 4, -1),
+	array(4, 0, 10, 4, 10, 5, 0, 3, 10, 6, 10, 7, 3, 7, 10, -1),
+	array(7, 6, 10, 7, 10, 8, 5, 4, 10, 4, 8, 10, -1, -1, -1, -1),
+	array(6, 9, 5, 6, 11, 9, 11, 8, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 6, 11, 0, 6, 3, 0, 5, 6, 0, 9, 5, -1, -1, -1, -1),
+	array(0, 11, 8, 0, 5, 11, 0, 1, 5, 5, 6, 11, -1, -1, -1, -1),
+	array(6, 11, 3, 6, 3, 5, 5, 3, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 10, 9, 5, 11, 9, 11, 8, 11, 5, 6, -1, -1, -1, -1),
+	array(0, 11, 3, 0, 6, 11, 0, 9, 6, 5, 6, 9, 1, 2, 10, -1),
+	array(11, 8, 5, 11, 5, 6, 8, 0, 5, 10, 5, 2, 0, 2, 5, -1),
+	array(6, 11, 3, 6, 3, 5, 2, 10, 3, 10, 5, 3, -1, -1, -1, -1),
+	array(5, 8, 9, 5, 2, 8, 5, 6, 2, 3, 8, 2, -1, -1, -1, -1),
+	array(9, 5, 6, 9, 6, 0, 0, 6, 2, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 5, 8, 1, 8, 0, 5, 6, 8, 3, 8, 2, 6, 2, 8, -1),
+	array(1, 5, 6, 2, 1, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, -1),
+	array(10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, -1, -1, -1, -1),
+	array(0, 3, 8, 5, 6, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 5, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)
+	);
+
+// Cube vertex positions (8 corners of a unit cube)
+const CUBE_VERTICES = array<vec3<f32>, 8>(
+	vec3(0.0, 0.0, 0.0), // 0
+	vec3(1.0, 0.0, 0.0), // 1
+	vec3(1.0, 1.0, 0.0), // 2
+	vec3(0.0, 1.0, 0.0), // 3
+	vec3(0.0, 0.0, 1.0), // 4
+	vec3(1.0, 0.0, 1.0), // 5
+	vec3(1.0, 1.0, 1.0), // 6
+	vec3(0.0, 1.0, 1.0)  // 7
+);
+
+// Edge connections for interpolation
+const EDGE_VERTICES = array<array<u32, 2>, 12>(
+	array(0u, 1u), array(1u, 2u), array(2u, 3u), array(3u, 0u),
+	array(4u, 5u), array(5u, 6u), array(6u, 7u), array(7u, 4u),
+	array(0u, 4u), array(1u, 5u), array(2u, 6u), array(3u, 7u)
 );
 
 fn getVoxel(pos: vec3<u32>) -> f32 {
 	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
 	return voxel[index];
+}
+
+fn getVoxelSafe(pos: vec3<i32>) -> f32 {
+	if (pos.x < 0 || pos.y < 0 || pos.z < 0 ||
+	    pos.x >= i32(context.grid_size) ||
+	    pos.y >= i32(context.grid_size) ||
+	    pos.z >= i32(context.grid_size)) {
+		return 1.0; // Outside bounds = solid
+	}
+	return getVoxel(vec3<u32>(pos));
+}
+
+fn interpolateVertex(p1: vec3<f32>, p2: vec3<f32>, val1: f32, val2: f32) -> vec3<f32> {
+	let isolevel = 0.0;
+	if (abs(isolevel - val1) < 0.00001) {
+		return p1;
+	}
+	if (abs(isolevel - val2) < 0.00001) {
+		return p2;
+	}
+	if (abs(val1 - val2) < 0.00001) {
+		return p1;
+	}
+	
+	let mu = (isolevel - val1) / (val2 - val1);
+	return p1 + mu * (p2 - p1);
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -65,33 +314,143 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 	for (var x = 0u; x < COMPRESSION; x++) {
 		for (var y = 0u; y < COMPRESSION; y++) {
 			for (var z = 0u; z < COMPRESSION; z++) {
-				let coord = vec3<u32>(x,y,z);
-				let voxel = getVoxel(coord + id * COMPRESSION);
-				if (voxel <= 0.0) {
-					density[index]++;
-					for (var n = 0; n < 6; n++) {
-						// for every neighbor face
-						let neighborPos = vec3<i32>(coord + id * COMPRESSION) + NEIGHBORS[n];
-						var shouldAddFace = false;
+				let coord = vec3<u32>(x, y, z);
+				let worldPos = vec3<i32>(coord + id * COMPRESSION);
+				
+				// Get the 8 corner values of the cube
+				var cubeValues: array<f32, 8>;
+				cubeValues[0] = getVoxelSafe(worldPos + vec3(0, 0, 0));
+				cubeValues[1] = getVoxelSafe(worldPos + vec3(1, 0, 0));
+				cubeValues[2] = getVoxelSafe(worldPos + vec3(1, 1, 0));
+				cubeValues[3] = getVoxelSafe(worldPos + vec3(0, 1, 0));
+				cubeValues[4] = getVoxelSafe(worldPos + vec3(0, 0, 1));
+				cubeValues[5] = getVoxelSafe(worldPos + vec3(1, 0, 1));
+				cubeValues[6] = getVoxelSafe(worldPos + vec3(1, 1, 1));
+				cubeValues[7] = getVoxelSafe(worldPos + vec3(0, 1, 1));
 
-						// Check if neighbor is out of bounds (edge of grid)
-						if (neighborPos.x < 0 || neighborPos.y < 0 || neighborPos.z < 0 ||
-						    neighborPos.x >= i32(context.grid_size) ||
-						    neighborPos.y >= i32(context.grid_size) ||
-						    neighborPos.z >= i32(context.grid_size)) {
-							shouldAddFace = true; // Out of bounds = add face
-						} else {
-							// In bounds, check if neighbor is empty
-							shouldAddFace = getVoxel(vec3<u32>(neighborPos)) > 0.0;
-						}
+				// Calculate cube configuration index
+				var cubeIndex = 0u;
+				if (cubeValues[0] < 0.0) { cubeIndex |= 1u; }
+				if (cubeValues[1] < 0.0) { cubeIndex |= 2u; }
+				if (cubeValues[2] < 0.0) { cubeIndex |= 4u; }
+				if (cubeValues[3] < 0.0) { cubeIndex |= 8u; }
+				if (cubeValues[4] < 0.0) { cubeIndex |= 16u; }
+				if (cubeValues[5] < 0.0) { cubeIndex |= 32u; }
+				if (cubeValues[6] < 0.0) { cubeIndex |= 64u; }
+				if (cubeValues[7] < 0.0) { cubeIndex |= 128u; }
 
-						if (shouldAddFace) {
-							// Generate 6 vertices (2 triangles) for this face
-							for (var v = 0; v < 6; v++) {
-								var vertexOffset = CUBE_TRIANGLE_VERTICES[n * 6 + v];
-								var worldVertex = vec3<f32>(coord + id * COMPRESSION) + vec3<f32>(vertexOffset);
-								mesh.vertices[mesh.vertexCount] = vec4<f32>(worldVertex, 1.0);
-								mesh.vertexCount++;
+				// Skip empty cubes
+				if (cubeIndex == 0u || cubeIndex == 255u) {
+					continue;
+				}
+
+				density[index]++;
+
+				// Get edge configuration
+				let edges = EDGE_TABLE[cubeIndex];
+				if (edges == 0u) {
+					continue;
+				}
+
+				// Calculate interpolated vertices on edges
+				var vertexList: array<vec3<f32>, 12>;
+				
+				// Edge 0: vertex 0 to vertex 1
+				if ((edges & 1u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
+					vertexList[0] = interpolateVertex(p1, p2, cubeValues[0], cubeValues[1]);
+				}
+				// Edge 1: vertex 1 to vertex 2
+				if ((edges & 2u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
+					vertexList[1] = interpolateVertex(p1, p2, cubeValues[1], cubeValues[2]);
+				}
+				// Edge 2: vertex 2 to vertex 3
+				if ((edges & 4u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
+					vertexList[2] = interpolateVertex(p1, p2, cubeValues[2], cubeValues[3]);
+				}
+				// Edge 3: vertex 3 to vertex 0
+				if ((edges & 8u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
+					vertexList[3] = interpolateVertex(p1, p2, cubeValues[3], cubeValues[0]);
+				}
+				// Edge 4: vertex 4 to vertex 5
+				if ((edges & 16u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
+					vertexList[4] = interpolateVertex(p1, p2, cubeValues[4], cubeValues[5]);
+				}
+				// Edge 5: vertex 5 to vertex 6
+				if ((edges & 32u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
+					vertexList[5] = interpolateVertex(p1, p2, cubeValues[5], cubeValues[6]);
+				}
+				// Edge 6: vertex 6 to vertex 7
+				if ((edges & 64u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
+					vertexList[6] = interpolateVertex(p1, p2, cubeValues[6], cubeValues[7]);
+				}
+				// Edge 7: vertex 7 to vertex 4
+				if ((edges & 128u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
+					vertexList[7] = interpolateVertex(p1, p2, cubeValues[7], cubeValues[4]);
+				}
+				// Edge 8: vertex 0 to vertex 4
+				if ((edges & 256u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
+					vertexList[8] = interpolateVertex(p1, p2, cubeValues[0], cubeValues[4]);
+				}
+				// Edge 9: vertex 1 to vertex 5
+				if ((edges & 512u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
+					vertexList[9] = interpolateVertex(p1, p2, cubeValues[1], cubeValues[5]);
+				}
+				// Edge 10: vertex 2 to vertex 6
+				if ((edges & 1024u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
+					vertexList[10] = interpolateVertex(p1, p2, cubeValues[2], cubeValues[6]);
+				}
+				// Edge 11: vertex 3 to vertex 7
+				if ((edges & 2048u) != 0u) {
+					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
+					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
+					vertexList[11] = interpolateVertex(p1, p2, cubeValues[3], cubeValues[7]);
+				}
+
+				// Generate triangles using lookup table
+				let triangleConfig = TRIANGLE_TABLE[cubeIndex];
+				for (var i = 0; triangleConfig[i] != -1 && i < 15 && mesh.vertexCount + 3 <= 2048; i += 3) {
+					let edge1 = triangleConfig[i];
+					let edge2 = triangleConfig[i + 1];
+					let edge3 = triangleConfig[i + 2];
+					
+					// Safety check for edge indices and vertex buffer bounds
+					if (edge1 >= 0 && edge1 < 12 && edge2 >= 0 && edge2 < 12 && edge3 >= 0 && edge3 < 12) {
+						// Additional check to ensure we have valid interpolated vertices for these edges
+						let edgeBit1 = 1u << u32(edge1);
+						let edgeBit2 = 1u << u32(edge2);
+						let edgeBit3 = 1u << u32(edge3);
+						
+						if ((edges & edgeBit1) != 0u && (edges & edgeBit2) != 0u && (edges & edgeBit3) != 0u) {
+							// Ensure we don't exceed vertex buffer capacity
+							if (mesh.vertexCount + 3 <= 2048) {
+								mesh.vertices[mesh.vertexCount] = vec4<f32>(vertexList[edge1], 1.0);
+								mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(vertexList[edge2], 1.0);
+								mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(vertexList[edge3], 1.0);
+								mesh.vertexCount += 3u;
+							} else {
+								break; // Stop adding triangles if buffer is full
 							}
 						}
 					}
