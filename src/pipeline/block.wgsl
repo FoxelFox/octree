@@ -76,51 +76,31 @@ fn vs_main(
 	return out;
 }
 
+// G-buffer output structure
+struct GBufferOutput {
+    @location(0) position: vec4<f32>,  // xyz = world position, w = depth
+    @location(1) normal: vec4<f32>,    // xyz = world normal, w = unused
+    @location(2) diffuse: vec4<f32>,   // xyz = diffuse color, w = unused
+}
+
 @fragment
-fn fm_main(in: VertexOutput) -> @location(0) vec4f {
+fn fm_main(in: VertexOutput) -> GBufferOutput {
+    var output: GBufferOutput;
+    
     // Extract camera position from inverse view matrix
     let camera_pos = context.inverse_view[3].xyz;
     
-    // Calculate distance from camera
+    // Calculate distance from camera for depth
     let distance = length(camera_pos - in.world_pos);
     
-    // Light falloff parameters
-    let max_light_distance = 256.0; // Maximum distance for light effect
-    let falloff_start = 20.0; // Distance where falloff begins
+    // Output world position and depth
+    output.position = vec4<f32>(in.world_pos, distance);
     
-    // Calculate distance attenuation
-    var light_intensity = 1.0;
-    if (distance > falloff_start) {
-        let falloff_range = max_light_distance - falloff_start;
-        let falloff_factor = max(0.0, (max_light_distance - distance) / falloff_range);
-        light_intensity = falloff_factor * falloff_factor; // Quadratic falloff
-    }
+    // Output world normal
+    output.normal = vec4<f32>(normalize(in.normal), 1.0);
     
-    // Light direction from fragment to camera (light at camera position)
-    let light_dir = normalize(camera_pos - in.world_pos);
+    // Output diffuse color
+    output.diffuse = vec4<f32>(in.color, 1.0);
     
-    // Simple diffuse lighting
-    let diffuse = max(dot(in.normal, light_dir), 0.0);
-    
-    // Ambient lighting to prevent completely black surfaces
-    let ambient = 0.3;
-    
-    // Apply distance attenuation to diffuse lighting only
-    let lighting = ambient + diffuse * light_intensity;
-    
-    // Apply lighting to color
-    let lit_color = in.color * lighting;
-    
-    // Fog parameters
-    let fog_color = vec3<f32>(0.125, 0.125, 0.125); // Gray background color
-    let fog_start = 50.0;
-    let fog_end = 600.0;
-    
-    // Calculate fog factor (0 = full fog, 1 = no fog)
-    let fog_factor = clamp((fog_end - distance) / (fog_end - fog_start), 0.0, 1.0);
-    
-    // Mix lit color with fog color
-    let final_color = mix(fog_color, lit_color.rgb, fog_factor);
-    
-    return vec4(final_color, 1.0);
+    return output;
 }
