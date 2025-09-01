@@ -1,5 +1,5 @@
 // Global TAA state that can be modified
-export let taaToggleState = {enabled: false};
+export let taaToggleState = {enabled: true};
 
 export class GPUContext {
 	device: GPUDevice;
