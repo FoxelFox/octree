@@ -9,7 +9,8 @@ struct VertexOutput {
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 2048>, // worst case is way larger than 2048
+	vertices: array<vec4<f32>, 1152>, // worst case is way larger than 2048
+	normals: array<vec3<f32>, 1152>,
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
@@ -39,11 +40,6 @@ fn randomColor(meshIndex: u32) -> vec3<f32> {
     );
 }
 
-fn calculateNormal(v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
-    let edge1 = v1 - v0;
-    let edge2 = v2 - v0;
-    return normalize(cross(edge1, edge2));
-}
 
 @vertex
 fn vs_main(
@@ -53,25 +49,15 @@ fn vs_main(
 	var out: VertexOutput;
 	
 	// Generate color once per vertex based on mesh index
-	out.color = randomColor(instanceIndex);
-	//out.color = vec3(1,1,1);
+	//out.color = randomColor(instanceIndex);
+	out.color = vec3(1,1,1);
 	
 	// Get world position
 	let world_pos = meshes[instanceIndex].vertices[vertexIndex].xyz;
 	out.world_pos = world_pos;
 	
-	// Calculate normal from triangle (assuming triangulated mesh)
-	let triangleIndex = vertexIndex / 3u;
-	let baseVertex = triangleIndex * 3u;
-	
-	if (baseVertex + 2u < meshes[instanceIndex].vertexCount) {
-		let v0 = meshes[instanceIndex].vertices[baseVertex].xyz;
-		let v1 = meshes[instanceIndex].vertices[baseVertex + 1u].xyz;
-		let v2 = meshes[instanceIndex].vertices[baseVertex + 2u].xyz;
-		out.normal = calculateNormal(v0, v1, v2);
-	} else {
-		out.normal = vec3<f32>(0.0, 1.0, 0.0); // Default up normal
-	}
+	// Use stored normal
+	out.normal = meshes[instanceIndex].normals[vertexIndex];
 	
 	out.position = context.perspective * context.view * meshes[instanceIndex].vertices[vertexIndex];
 	return out;

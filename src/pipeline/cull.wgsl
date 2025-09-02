@@ -2,7 +2,8 @@
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 2048>, // worst case is way larger than 2048
+	vertices: array<vec4<f32>, 1152>, // worst case is way larger than 2048
+	normals: array<vec3<f32>, 1152>,
 }
 
 // Input

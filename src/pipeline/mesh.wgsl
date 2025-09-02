@@ -2,7 +2,8 @@
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 2048>, // worst case is way larger than 2048
+	vertices: array<vec4<f32>, 1152>, // worst case is way larger than 2048
+	normals: array<vec3<f32>, 1152>,
 }
 
 struct Command {
@@ -59,7 +60,7 @@ const EDGE_TABLE = array<u32, 256>(
 );
 
 // Complete marching cubes triangle table - all 256 configurations
-const TRIANGLE_TABLE = array<array<i32, 16>, 192>(
+const TRIANGLE_TABLE = array<array<i32, 16>, 256>(
 	array(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
 	array(0, 8, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
 	array(0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
@@ -251,8 +252,72 @@ const TRIANGLE_TABLE = array<array<i32, 16>, 192>(
 	array(1, 3, 6, 1, 6, 10, 3, 8, 6, 5, 6, 9, 8, 9, 6, -1),
 	array(10, 1, 0, 10, 0, 6, 9, 5, 0, 5, 6, 0, -1, -1, -1, -1),
 	array(0, 3, 8, 5, 6, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
-	array(10, 5, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)
-	);
+	array(10, 5, 6, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 5, 10, 7, 5, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 5, 10, 11, 7, 5, 8, 3, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 11, 7, 5, 10, 11, 1, 9, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(10, 7, 5, 10, 11, 7, 9, 8, 1, 8, 3, 1, -1, -1, -1, -1),
+	array(11, 1, 2, 11, 7, 1, 7, 5, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, 1, 2, 7, 1, 7, 5, 7, 2, 11, -1, -1, -1, -1),
+	array(9, 7, 5, 9, 2, 7, 9, 0, 2, 2, 11, 7, -1, -1, -1, -1),
+	array(7, 5, 2, 7, 2, 11, 5, 9, 2, 3, 2, 8, 9, 8, 2, -1),
+	array(2, 5, 10, 2, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 2, 0, 8, 5, 2, 8, 7, 5, 10, 2, 5, -1, -1, -1, -1),
+	array(9, 0, 1, 5, 10, 3, 5, 3, 7, 3, 10, 2, -1, -1, -1, -1),
+	array(9, 8, 2, 9, 2, 1, 8, 7, 2, 10, 2, 5, 7, 5, 2, -1),
+	array(1, 3, 5, 3, 7, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 7, 0, 7, 1, 1, 7, 5, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 0, 3, 9, 3, 5, 5, 3, 7, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 8, 7, 5, 9, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 8, 4, 5, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(5, 0, 4, 5, 11, 0, 5, 10, 11, 11, 3, 0, -1, -1, -1, -1),
+	array(0, 1, 9, 8, 4, 10, 8, 10, 11, 10, 4, 5, -1, -1, -1, -1),
+	array(10, 11, 4, 10, 4, 5, 11, 3, 4, 9, 4, 1, 3, 1, 4, -1),
+	array(2, 5, 1, 2, 8, 5, 2, 11, 8, 4, 5, 8, -1, -1, -1, -1),
+	array(0, 4, 11, 0, 11, 3, 4, 5, 11, 2, 11, 1, 5, 1, 11, -1),
+	array(0, 2, 5, 0, 5, 9, 2, 11, 5, 4, 5, 8, 11, 8, 5, -1),
+	array(9, 4, 5, 2, 11, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 5, 10, 3, 5, 2, 3, 4, 5, 3, 8, 4, -1, -1, -1, -1),
+	array(5, 10, 2, 5, 2, 4, 4, 2, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 10, 2, 3, 5, 10, 3, 8, 5, 4, 5, 8, 0, 1, 9, -1),
+	array(5, 10, 2, 5, 2, 4, 1, 9, 2, 9, 4, 2, -1, -1, -1, -1),
+	array(8, 4, 5, 8, 5, 3, 3, 5, 1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 4, 5, 1, 0, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(8, 4, 5, 8, 5, 3, 9, 0, 5, 0, 3, 5, -1, -1, -1, -1),
+	array(9, 4, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 11, 7, 4, 9, 11, 9, 10, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 8, 3, 4, 9, 7, 9, 11, 7, 9, 10, 11, -1, -1, -1, -1),
+	array(1, 10, 11, 1, 11, 4, 1, 4, 0, 7, 4, 11, -1, -1, -1, -1),
+	array(3, 1, 4, 3, 4, 8, 1, 10, 4, 7, 4, 11, 10, 11, 4, -1),
+	array(4, 11, 7, 9, 11, 4, 9, 2, 11, 9, 1, 2, -1, -1, -1, -1),
+	array(9, 7, 4, 9, 11, 7, 9, 1, 11, 2, 11, 1, 0, 8, 3, -1),
+	array(11, 7, 4, 11, 4, 2, 2, 4, 0, -1, -1, -1, -1, -1, -1, -1),
+	array(11, 7, 4, 11, 4, 2, 8, 3, 4, 3, 2, 4, -1, -1, -1, -1),
+	array(2, 9, 10, 2, 7, 9, 2, 3, 7, 7, 4, 9, -1, -1, -1, -1),
+	array(9, 10, 7, 9, 7, 4, 10, 2, 7, 8, 7, 0, 2, 0, 7, -1),
+	array(3, 7, 10, 3, 10, 2, 7, 4, 10, 1, 10, 0, 4, 0, 10, -1),
+	array(1, 10, 2, 8, 7, 4, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 9, 1, 4, 1, 7, 7, 1, 3, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 9, 1, 4, 1, 7, 0, 8, 1, 8, 7, 1, -1, -1, -1, -1),
+	array(4, 0, 3, 7, 4, 3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(4, 8, 7, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 10, 8, 10, 11, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 0, 9, 3, 9, 11, 11, 9, 10, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 1, 10, 0, 10, 8, 8, 10, 11, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 1, 10, 11, 3, 10, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 2, 11, 1, 11, 9, 9, 11, 8, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 0, 9, 3, 9, 11, 1, 2, 9, 2, 11, 9, -1, -1, -1, -1),
+	array(0, 2, 11, 8, 0, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(3, 2, 11, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 3, 8, 2, 8, 10, 10, 8, 9, -1, -1, -1, -1, -1, -1, -1),
+	array(9, 10, 2, 0, 9, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(2, 3, 8, 2, 8, 10, 0, 1, 8, 1, 10, 8, -1, -1, -1, -1),
+	array(1, 10, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(1, 3, 8, 9, 1, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 9, 1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(0, 3, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1),
+	array(-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1)
+);
 
 // Cube vertex positions (8 corners of a unit cube)
 const CUBE_VERTICES = array<vec3<f32>, 8>(
@@ -354,105 +419,48 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 				// Calculate interpolated vertices on edges
 				var vertexList: array<vec3<f32>, 12>;
-				
-				// Edge 0: vertex 0 to vertex 1
-				if ((edges & 1u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
-					vertexList[0] = interpolateVertex(p1, p2, cubeValues[0], cubeValues[1]);
-				}
-				// Edge 1: vertex 1 to vertex 2
-				if ((edges & 2u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
-					vertexList[1] = interpolateVertex(p1, p2, cubeValues[1], cubeValues[2]);
-				}
-				// Edge 2: vertex 2 to vertex 3
-				if ((edges & 4u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
-					vertexList[2] = interpolateVertex(p1, p2, cubeValues[2], cubeValues[3]);
-				}
-				// Edge 3: vertex 3 to vertex 0
-				if ((edges & 8u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
-					vertexList[3] = interpolateVertex(p1, p2, cubeValues[3], cubeValues[0]);
-				}
-				// Edge 4: vertex 4 to vertex 5
-				if ((edges & 16u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
-					vertexList[4] = interpolateVertex(p1, p2, cubeValues[4], cubeValues[5]);
-				}
-				// Edge 5: vertex 5 to vertex 6
-				if ((edges & 32u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
-					vertexList[5] = interpolateVertex(p1, p2, cubeValues[5], cubeValues[6]);
-				}
-				// Edge 6: vertex 6 to vertex 7
-				if ((edges & 64u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
-					vertexList[6] = interpolateVertex(p1, p2, cubeValues[6], cubeValues[7]);
-				}
-				// Edge 7: vertex 7 to vertex 4
-				if ((edges & 128u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
-					vertexList[7] = interpolateVertex(p1, p2, cubeValues[7], cubeValues[4]);
-				}
-				// Edge 8: vertex 0 to vertex 4
-				if ((edges & 256u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[0];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[4];
-					vertexList[8] = interpolateVertex(p1, p2, cubeValues[0], cubeValues[4]);
-				}
-				// Edge 9: vertex 1 to vertex 5
-				if ((edges & 512u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[1];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[5];
-					vertexList[9] = interpolateVertex(p1, p2, cubeValues[1], cubeValues[5]);
-				}
-				// Edge 10: vertex 2 to vertex 6
-				if ((edges & 1024u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[2];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[6];
-					vertexList[10] = interpolateVertex(p1, p2, cubeValues[2], cubeValues[6]);
-				}
-				// Edge 11: vertex 3 to vertex 7
-				if ((edges & 2048u) != 0u) {
-					let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[3];
-					let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[7];
-					vertexList[11] = interpolateVertex(p1, p2, cubeValues[3], cubeValues[7]);
+
+				// Check each edge bit and interpolate if necessary
+				for (var i = 0u; i < 12u; i++) {
+					let edgeBit = 1u << i;
+					if ((edges & edgeBit) != 0u) {
+						let v1 = EDGE_VERTICES[i][0];
+						let v2 = EDGE_VERTICES[i][1];
+						let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[v1];
+						let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[v2];
+						vertexList[i] = interpolateVertex(p1, p2, cubeValues[v1], cubeValues[v2]);
+					}
 				}
 
 				// Generate triangles using lookup table
 				let triangleConfig = TRIANGLE_TABLE[cubeIndex];
-				for (var i = 0; triangleConfig[i] != -1 && i < 15 && mesh.vertexCount + 3 <= 2048; i += 3) {
+				for (var i = 0; triangleConfig[i] != -1 && i < 16; i += 3) {
 					let edge1 = triangleConfig[i];
 					let edge2 = triangleConfig[i + 1];
 					let edge3 = triangleConfig[i + 2];
-					
-					// Safety check for edge indices and vertex buffer bounds
-					if (edge1 >= 0 && edge1 < 12 && edge2 >= 0 && edge2 < 12 && edge3 >= 0 && edge3 < 12) {
-						// Additional check to ensure we have valid interpolated vertices for these edges
-						let edgeBit1 = 1u << u32(edge1);
-						let edgeBit2 = 1u << u32(edge2);
-						let edgeBit3 = 1u << u32(edge3);
+
+					// Ensure we don't exceed vertex buffer capacity
+					if (mesh.vertexCount + 3 <= 1152 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
+						let v1 = vertexList[edge1];
+						let v2 = vertexList[edge2];
+						let v3 = vertexList[edge3];
 						
-						if ((edges & edgeBit1) != 0u && (edges & edgeBit2) != 0u && (edges & edgeBit3) != 0u) {
-							// Ensure we don't exceed vertex buffer capacity
-							if (mesh.vertexCount + 3 <= 2048) {
-								mesh.vertices[mesh.vertexCount] = vec4<f32>(vertexList[edge1], 1.0);
-								mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(vertexList[edge2], 1.0);
-								mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(vertexList[edge3], 1.0);
-								mesh.vertexCount += 3u;
-							} else {
-								break; // Stop adding triangles if buffer is full
-							}
-						}
+						// Calculate normal for triangle
+						let edge_a = v2 - v1;
+						let edge_b = v3 - v1;
+						let normal = normalize(cross(edge_a, edge_b));
+						
+						mesh.vertices[mesh.vertexCount] = vec4<f32>(v1, 1.0);
+						mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(v2, 1.0);
+						mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(v3, 1.0);
+						
+						mesh.normals[mesh.vertexCount] = normal;
+						mesh.normals[mesh.vertexCount + 1] = normal;
+						mesh.normals[mesh.vertexCount + 2] = normal;
+						
+						mesh.vertexCount += 3u;
+					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
+						break; // End of triangles for this configuration
 					}
 				}
 			}

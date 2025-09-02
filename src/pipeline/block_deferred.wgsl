@@ -6,6 +6,8 @@ const FAR_DISTANCE = 10000.0;
 const MAX_LIGHT_DISTANCE = 128.0;
 const AMBIENT_LIGHT = 0.3;
 const BASE_LIGHT_INTENSITY = 0.7;
+const SUNLIGHT_INTENSITY = 0.8;
+const SUNLIGHT_DIRECTION = vec3<f32>(-0.3, -0.7, 0.2);
 const FOG_START = 50.0;
 const FOG_END = 256.0;
 const MOTION_THRESHOLD = 0.001;
@@ -58,17 +60,23 @@ fn calculate_ray_direction(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
 
 // Calculate lighting for a given world position and surface properties
 fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_color: vec3<f32>, camera_pos: vec3<f32>, distance: f32) -> vec3<f32> {
-    // Calculate distance attenuation
-    var light_intensity = BASE_LIGHT_INTENSITY;
+    // Calculate distance attenuation for camera light
+    var camera_light_intensity = BASE_LIGHT_INTENSITY;
     if (distance > 0.0) {
         let falloff_factor = max(0.0, (MAX_LIGHT_DISTANCE - distance) / MAX_LIGHT_DISTANCE);
-        light_intensity = falloff_factor * falloff_factor;
+        camera_light_intensity = falloff_factor * falloff_factor;
     }
     
-    // Light direction from fragment to camera (light at camera position)
-    let light_dir = normalize(camera_pos - world_pos);
-    let diffuse = max(dot(world_normal, light_dir), 0.0);
-    let lighting = AMBIENT_LIGHT + diffuse * light_intensity;
+    // Camera light direction from fragment to camera (light at camera position)
+    let camera_light_dir = normalize(camera_pos - world_pos);
+    let camera_diffuse = max(dot(world_normal, camera_light_dir), 0.0);
+    
+    // Sunlight direction (directional light)
+    let sun_light_dir = normalize(SUNLIGHT_DIRECTION);
+    let sun_diffuse = max(dot(world_normal, sun_light_dir), 0.0);
+    
+    // Combine lighting
+    let lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY);
     
     // Apply lighting to color
     let lit_color = diffuse_color * lighting;
