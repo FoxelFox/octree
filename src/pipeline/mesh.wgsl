@@ -338,6 +338,19 @@ const EDGE_VERTICES = array<array<u32, 2>, 12>(
 	array(0u, 4u), array(1u, 5u), array(2u, 6u), array(3u, 7u)
 );
 
+fn calculateGradient(pos: vec3<i32>) -> vec3<f32> {
+	let dx = getVoxelSafe(pos + vec3(1, 0, 0)) - getVoxelSafe(pos - vec3(1, 0, 0));
+	let dy = getVoxelSafe(pos + vec3(0, 1, 0)) - getVoxelSafe(pos - vec3(0, 1, 0));
+	let dz = getVoxelSafe(pos + vec3(0, 0, 1)) - getVoxelSafe(pos - vec3(0, 0, 1));
+	
+	let gradient = vec3<f32>(dx, dy, dz);
+	let length = length(gradient);
+	if (length > 0.0001) {
+		return -gradient / length; // Negative because we want normals pointing outward
+	}
+	return vec3<f32>(0.0, 1.0, 0.0); // Default normal if gradient is zero
+}
+
 fn getVoxel(pos: vec3<u32>) -> f32 {
 	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
 	return voxel[index];
@@ -367,6 +380,22 @@ fn interpolateVertex(p1: vec3<f32>, p2: vec3<f32>, val1: f32, val2: f32) -> vec3
 	
 	let mu = (isolevel - val1) / (val2 - val1);
 	return p1 + mu * (p2 - p1);
+}
+
+fn interpolateNormal(n1: vec3<f32>, n2: vec3<f32>, val1: f32, val2: f32) -> vec3<f32> {
+	let isolevel = 0.0;
+	if (abs(isolevel - val1) < 0.00001) {
+		return normalize(n1);
+	}
+	if (abs(isolevel - val2) < 0.00001) {
+		return normalize(n2);
+	}
+	if (abs(val1 - val2) < 0.00001) {
+		return normalize(n1);
+	}
+	
+	let mu = (isolevel - val1) / (val2 - val1);
+	return normalize(n1 + mu * (n2 - n1));
 }
 
 @compute @workgroup_size(4, 4, 4)
@@ -423,8 +452,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					continue;
 				}
 
-				// Calculate interpolated vertices on edges
+				// Calculate interpolated vertices and normals on edges
 				var vertexList: array<vec3<f32>, 12>;
+				var normalList: array<vec3<f32>, 12>;
 
 				// Check each edge bit and interpolate if necessary
 				for (var i = 0u; i < 12u; i++) {
@@ -435,6 +465,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[v1];
 						let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[v2];
 						vertexList[i] = interpolateVertex(p1, p2, cubeValues[v1], cubeValues[v2]);
+						
+						// Calculate gradients at cube vertices
+						let n1 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v1]));
+						let n2 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v2]));
+						normalList[i] = interpolateNormal(n1, n2, cubeValues[v1], cubeValues[v2]);
 					}
 				}
 
@@ -451,18 +486,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let v2 = vertexList[edge2];
 						let v3 = vertexList[edge3];
 						
-						// Calculate normal for triangle
-						let edge_a = v2 - v1;
-						let edge_b = v3 - v1;
-						let normal = normalize(cross(edge_a, edge_b));
+						let n1 = normalList[edge1];
+						let n2 = normalList[edge2];
+						let n3 = normalList[edge3];
 						
 						mesh.vertices[mesh.vertexCount] = vec4<f32>(v1, 1.0);
 						mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(v2, 1.0);
 						mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(v3, 1.0);
 						
-						mesh.normals[mesh.vertexCount] = normal;
-						mesh.normals[mesh.vertexCount + 1] = normal;
-						mesh.normals[mesh.vertexCount + 2] = normal;
+						mesh.normals[mesh.vertexCount] = n1;
+						mesh.normals[mesh.vertexCount + 1] = n2;
+						mesh.normals[mesh.vertexCount + 2] = n3;
 						
 						mesh.vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
