@@ -393,6 +393,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 				cubeValues[6] = getVoxelSafe(worldPos + vec3(1, 1, 1));
 				cubeValues[7] = getVoxelSafe(worldPos + vec3(0, 1, 1));
 
+
+				if (cubeValues[0] < 0.0) {
+					density[index]++;
+				}
+
+
 				// Calculate cube configuration index
 				var cubeIndex = 0u;
 				if (cubeValues[0] < 0.0) { cubeIndex |= 1u; }
@@ -409,7 +415,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					continue;
 				}
 
-				density[index]++;
+
 
 				// Get edge configuration
 				let edges = EDGE_TABLE[cubeIndex];
