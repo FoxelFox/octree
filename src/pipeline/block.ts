@@ -19,8 +19,6 @@ export class Block {
 	deferredPipeline: GPURenderPipeline;
 	deferredBindGroup: GPUBindGroup;
 	deferredUniformBindGroup: GPUBindGroup;
-	deferredTaaBindGroupA: GPUBindGroup;
-	deferredTaaBindGroupB: GPUBindGroup;
 
 	initialized: boolean;
 	timer: RenderTimer;
@@ -31,88 +29,12 @@ export class Block {
 	diffuseTexture: GPUTexture;
 	depthTexture: GPUTexture;
 
-	// TAA textures (ping-pong buffers)
-	prevFrameTextureA: GPUTexture;
-	prevFrameTextureB: GPUTexture;
-	prevWorldPosTextureA: GPUTexture;
-	prevWorldPosTextureB: GPUTexture;
-	sampler: GPUSampler;
-
-	// Current frame index for ping-pong
-	frameIndex: number = 0;
-
-	// Clean ping-pong approach with alternating bind groups
-	getCurrentFrameTexture() {
-		return this.frameIndex % 2 === 0 ? this.prevFrameTextureA : this.prevFrameTextureB;
-	}
-
-	getPreviousFrameTexture() {
-		return this.frameIndex % 2 === 0 ? this.prevFrameTextureB : this.prevFrameTextureA;
-	}
-
-	getCurrentWorldPosTexture() {
-		return this.frameIndex % 2 === 0 ? this.prevWorldPosTextureA : this.prevWorldPosTextureB;
-	}
-
-	getPreviousWorldPosTexture() {
-		return this.frameIndex % 2 === 0 ? this.prevWorldPosTextureB : this.prevWorldPosTextureA;
-	}
-
-	getCurrentTaaBindGroup() {
-		// When writing to A (even frame), read from B (use bind group B)
-		// When writing to B (odd frame), read from A (use bind group A) 
-		return this.frameIndex % 2 === 0 ? this.deferredTaaBindGroupB : this.deferredTaaBindGroupA;
-	}
 
 	constructor() {
 		this.timer = new RenderTimer("block");
 		this.createGBufferTextures();
-		this.createTaaTextures();
-		this.createSampler();
 	}
 
-	createSampler() {
-		this.sampler = device.createSampler({
-			magFilter: "linear",
-			minFilter: "linear",
-		});
-	}
-
-	createTaaTextures() {
-		// Destroy existing TAA textures
-		if (this.prevFrameTextureA) this.prevFrameTextureA.destroy();
-		if (this.prevFrameTextureB) this.prevFrameTextureB.destroy();
-		if (this.prevWorldPosTextureA) this.prevWorldPosTextureA.destroy();
-		if (this.prevWorldPosTextureB) this.prevWorldPosTextureB.destroy();
-
-		const size = {width: canvas.width, height: canvas.height};
-
-		// Previous frame color textures (ping-pong buffers)
-		this.prevFrameTextureA = device.createTexture({
-			size,
-			format: "bgra8unorm",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
-
-		this.prevFrameTextureB = device.createTexture({
-			size,
-			format: "bgra8unorm",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
-
-		// Previous world position textures (ping-pong buffers)
-		this.prevWorldPosTextureA = device.createTexture({
-			size,
-			format: "rgba32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
-
-		this.prevWorldPosTextureB = device.createTexture({
-			size,
-			format: "rgba32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
-	}
 
 	createGBufferTextures() {
 		// Destroy existing textures
@@ -163,13 +85,9 @@ export class Block {
 			this.depthTexture.height !== canvas.height
 		) {
 			this.createGBufferTextures();
-			this.createTaaTextures();
 			// Need to recreate deferred bind groups with new textures
 			this.createDeferredBindGroup();
-			this.createDeferredTaaBindGroups();
 		}
-
-		// TAA bind groups are static, no need to recreate each frame
 
 		// Pass 1: G-buffer generation
 		const gBufferPass = commandEncoder.beginRenderPass({
@@ -219,7 +137,7 @@ export class Block {
 
 		gBufferPass.end();
 
-		// Pass 2: Deferred lighting with background and TAA
+		// Pass 2: Deferred lighting with background
 		const deferredPass = commandEncoder.beginRenderPass({
 			label: "Block Deferred Lighting",
 			colorAttachments: [
@@ -229,31 +147,15 @@ export class Block {
 					storeOp: "store",
 					clearValue: {r: 0, g: 0, b: 0, a: 0},
 				},
-				{
-					view: this.getCurrentFrameTexture().createView(),
-					loadOp: this.frameIndex === 0 ? "clear" : "load",  // Clear first frame, load subsequent frames
-					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
-				},
-				{
-					view: this.getCurrentWorldPosTexture().createView(),
-					loadOp: this.frameIndex === 0 ? "clear" : "load",  // Clear first frame, load subsequent frames
-					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
-				},
 			],
 		});
 
 		deferredPass.setPipeline(this.deferredPipeline);
 		deferredPass.setBindGroup(0, this.deferredUniformBindGroup);
 		deferredPass.setBindGroup(1, this.deferredBindGroup);
-		deferredPass.setBindGroup(2, this.getCurrentTaaBindGroup());
 		deferredPass.draw(6); // Full-screen quad
 
 		deferredPass.end();
-
-		// Just increment frame index for ping-pong logic
-		this.frameIndex++;
 
 		this.timer.resolveTimestamps(commandEncoder);
 	}
@@ -279,29 +181,6 @@ export class Block {
 		});
 	}
 
-	createDeferredTaaBindGroups() {
-		// Bind group A: reads from texture A (when we write to texture B)  
-		this.deferredTaaBindGroupA = device.createBindGroup({
-			label: "Deferred TAA Textures A",
-			layout: this.deferredPipeline.getBindGroupLayout(2),
-			entries: [
-				{binding: 0, resource: this.prevFrameTextureA.createView()},
-				{binding: 1, resource: this.sampler},
-				{binding: 2, resource: this.prevWorldPosTextureA.createView()},
-			],
-		});
-
-		// Bind group B: reads from texture B (when we write to texture A)
-		this.deferredTaaBindGroupB = device.createBindGroup({
-			label: "Deferred TAA Textures B",
-			layout: this.deferredPipeline.getBindGroupLayout(2),
-			entries: [
-				{binding: 0, resource: this.prevFrameTextureB.createView()},
-				{binding: 1, resource: this.sampler},
-				{binding: 2, resource: this.prevWorldPosTextureB.createView()},
-			],
-		});
-	}
 
 	init() {
 		// Create G-buffer pipeline
@@ -346,9 +225,7 @@ export class Block {
 					code: deferredShader,
 				}),
 				targets: [
-					{format: "bgra8unorm"}, // Canvas
-					{format: "bgra8unorm"}, // Previous frame texture
-					{format: "rgba32float"}, // Previous world position texture
+					{format: "bgra8unorm"}, // Canvas only
 				],
 			},
 			vertex: {
@@ -383,7 +260,6 @@ export class Block {
 		});
 
 		this.createDeferredBindGroup();
-		this.createDeferredTaaBindGroups();
 
 		this.initialized = true;
 	}

@@ -346,7 +346,7 @@ fn calculateGradient(pos: vec3<i32>) -> vec3<f32> {
 	let gradient = vec3<f32>(dx, dy, dz);
 	let length = length(gradient);
 	if (length > 0.0001) {
-		return -gradient / length; // Negative because we want normals pointing outward
+		return -gradient / length;
 	}
 	return vec3<f32>(0.0, 1.0, 0.0); // Default normal if gradient is zero
 }
