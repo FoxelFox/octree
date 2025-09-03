@@ -182,12 +182,10 @@ function loop() {
 	// Update timing display
 	const stats = frameGraph.getCurrentStats();
 	timingDiv.innerHTML = `
-        <b>One-Time Setup</b><br>
-		Octree Gen: ${noise.octreeTime.toFixed(3)} ms<br>
-        <b>Per Frame (${currentModeName})</b><br>
 		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
-		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}
+		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
+		Meshlets: ${cull.count}
 	`;
 
 	requestAnimationFrame(loop);
