@@ -9,8 +9,8 @@ struct VertexOutput {
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1152>, // worst case is way larger than 2048
-	normals: array<vec3<f32>, 1152>,
+	vertices: array<vec4<f32>, 1280>, // worst case is way larger than 2048
+	normals: array<vec3<f32>, 1280>,
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
@@ -49,8 +49,8 @@ fn vs_main(
 	var out: VertexOutput;
 	
 	// Generate color once per vertex based on mesh index
-	out.color = randomColor(instanceIndex);
-	//out.color = vec3(1,1,1);
+	//out.color = randomColor(instanceIndex);
+	out.color = vec3(1,1,1);
 	
 	// Get world position
 	let world_pos = meshes[instanceIndex].vertices[vertexIndex].xyz;

@@ -49,7 +49,7 @@ export class Block {
 		this.positionTexture = device.createTexture({
 			size,
 			format: "rgba32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
 		});
 
 		// Normal texture (RGBA16Float is sufficient for normals)

@@ -16,8 +16,8 @@ export class Mesh {
 		const maxMeshSize =
 			4           // vertexCount (u32 = 4 bytes)
 			+ 12        // padding to align vertices array to 16-byte boundary
-			+ 1152 * 16 // vertices (vec4<f32> = 16 bytes each)
-			+ 1152 * 16 // normals (vec3<f32> = 16 bytes each in array, padded)
+			+ 1280 * 16 // vertices (vec4<f32> = 16 bytes each)
+			+ 1280 * 16 // normals (vec3<f32> = 16 bytes each in array, padded)
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,
@@ -101,24 +101,5 @@ export class Mesh {
 			workgroupsPerDim,
 		);
 		pass.end();
-	}
-
-	async readback(): Promise<void> {
-		const readBuffer = device.createBuffer({
-			size: this.meshes.size,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-		});
-
-		const encoder = device.createCommandEncoder();
-		encoder.copyBufferToBuffer(this.meshes, 0, readBuffer, 0, this.meshes.size);
-		device.queue.submit([encoder.finish()]);
-
-		await readBuffer.mapAsync(GPUMapMode.READ);
-		const data = readBuffer.getMappedRange();
-		const result = data.slice();
-		readBuffer.unmap();
-		readBuffer.destroy();
-
-		console.log("Meshes", new Float32Array(result));
 	}
 }
