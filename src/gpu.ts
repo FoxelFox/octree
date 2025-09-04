@@ -1,5 +1,5 @@
 // Global TAA state that can be modified
-export let taaToggleState = {enabled: true};
+export let taaToggleState = {enabled: false};
 
 export class GPUContext {
 	device: GPUDevice;
@@ -13,6 +13,8 @@ export class GPUContext {
 		deltaX: number;
 		deltaY: number;
 		locked: boolean;
+		leftPressed: boolean;
+		rightPressed: boolean;
 	};
 	keys: Set<string>;
 	camera: {
@@ -46,6 +48,8 @@ export class GPUContext {
 			deltaX: 0,
 			deltaY: 0,
 			locked: false,
+			leftPressed: false,
+			rightPressed: false,
 		};
 		this.keys = new Set();
 		this.camera = {
@@ -75,6 +79,9 @@ export class GPUContext {
 		window.addEventListener("mousemove", this.handleMouseMove);
 		window.addEventListener("keydown", this.handleKeyDown);
 		window.addEventListener("keyup", this.handleKeyUp);
+		window.addEventListener("mousedown", this.handleMouseDown);
+		window.addEventListener("mouseup", this.handleMouseUp);
+		window.addEventListener("contextmenu", this.handleContextMenu);
 		this.canvas.addEventListener("click", this.requestPointerLock);
 		document.addEventListener(
 			"pointerlockchange",
@@ -175,6 +182,27 @@ export class GPUContext {
 
 	handleKeyUp = (ev: KeyboardEvent) => {
 		this.keys.delete(ev.code.toLowerCase());
+	};
+
+	handleMouseDown = (ev: MouseEvent) => {
+		if (ev.button === 0) { // Left mouse button
+			this.mouse.leftPressed = true;
+		} else if (ev.button === 2) { // Right mouse button
+			this.mouse.rightPressed = true;
+			ev.preventDefault(); // Prevent context menu
+		}
+	};
+
+	handleMouseUp = (ev: MouseEvent) => {
+		if (ev.button === 0) { // Left mouse button
+			this.mouse.leftPressed = false;
+		} else if (ev.button === 2) { // Right mouse button
+			this.mouse.rightPressed = false;
+		}
+	};
+
+	handleContextMenu = (ev: Event) => {
+		ev.preventDefault(); // Prevent context menu from appearing
 	};
 
 	requestPointerLock = () => {

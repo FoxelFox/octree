@@ -2,8 +2,8 @@
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1152>, // worst case is way larger than 2048
-	normals: array<vec3<f32>, 1152>,
+	vertices: array<vec4<f32>, 1280>,
+	normals: array<vec3<f32>, 1280>,
 }
 
 struct Command {
@@ -404,6 +404,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 	var mesh = Mesh();
 	var command = Command();
 	let index = to1DSmall(id);
+	density[index] = 0;
 
 	for (var x = 0u; x < COMPRESSION; x++) {
 		for (var y = 0u; y < COMPRESSION; y++) {
