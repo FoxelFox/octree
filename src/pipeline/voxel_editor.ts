@@ -4,6 +4,7 @@ import {Noise} from "./noise";
 import {Mesh} from "./mesh";
 import {Cull} from "./cull";
 import editShader from "./voxel_edit.wgsl" with {type: "text"};
+import {RenderTimer} from "./timing";
 
 interface VoxelEditCommand {
 	worldPosition: Float32Array;
@@ -37,12 +38,14 @@ export class VoxelEditor {
 	private editQueue: VoxelEditCommand[] = [];
 	private isProcessingEdits = false;
 	private pendingMeshUpdate = false;
+	private timer: RenderTimer;
 
 	constructor(block: Block, noise: Noise, mesh: Mesh, cull: Cull) {
 		this.block = block;
 		this.noise = noise;
 		this.mesh = mesh;
 		this.cull = cull;
+		this.timer = new RenderTimer("voxel_editor");
 
 		this.initPositionReading();
 		this.initVoxelEditing();
@@ -248,7 +251,9 @@ export class VoxelEditor {
 
 		// Run edit compute shader
 		const encoder = device.createCommandEncoder({label: "Voxel Edit"});
-		const computePass = encoder.beginComputePass();
+		const computePass = encoder.beginComputePass({
+			timestampWrites: this.timer.getTimestampWrites(),
+		});
 
 		computePass.setPipeline(this.editPipeline);
 		computePass.setBindGroup(0, this.editBindGroup);
@@ -263,7 +268,11 @@ export class VoxelEditor {
 		);
 
 		computePass.end();
+		this.timer.resolveTimestamps(encoder);
 		device.queue.submit([encoder.finish()]);
+		
+		// Read timing after submission
+		this.timer.readTimestamps();
 	}
 
 	/**
@@ -310,6 +319,13 @@ export class VoxelEditor {
 		// Check if the w component (distance) indicates valid geometry
 		// In the deferred renderer, valid geometry has a meaningful distance value
 		return this.currentWorldPosition[3] > 0;
+	}
+
+	/**
+	 * Get render time for voxel editing operations
+	 */
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 
 	/**

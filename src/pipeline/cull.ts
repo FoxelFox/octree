@@ -1,7 +1,8 @@
-import {contextUniform, device, gridSize} from "..";
-import {Mesh} from "./mesh";
-import {Noise} from "./noise";
-import shader from "./cull.wgsl" with {type: "text"};
+import { compression, contextUniform, device, gridSize } from "..";
+import { Mesh } from "./mesh";
+import { Noise } from "./noise";
+import shader from "./cull.wgsl" with { type: "text" };
+import { RenderTimer } from "./timing";
 
 export class Cull {
 	counter: GPUBuffer;
@@ -17,8 +18,11 @@ export class Cull {
 	indices: Uint32Array = new Uint32Array(0);
 	private readbackInProgress = false;
 	private framesSinceUpdate = 0;
+	timer: RenderTimer;
 
 	init(noise: Noise, mesh: Mesh) {
+		this.timer = new RenderTimer("cull");
+
 		this.counter = device.createBuffer({
 			size: 4,
 			usage:
@@ -33,7 +37,7 @@ export class Cull {
 		});
 
 		this.indicesBuffer = device.createBuffer({
-			size: Math.pow(gridSize / 8, 3) * 4,
+			size: Math.pow(gridSize / compression, 3) * 4,
 			usage:
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
@@ -87,7 +91,7 @@ export class Cull {
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
+					resource: { buffer: contextUniform.uniformBuffer },
 				},
 			],
 		});
@@ -97,13 +101,15 @@ export class Cull {
 		// Reset counter before culling
 		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
 
-		const pass = encoder.beginComputePass();
+		const pass = encoder.beginComputePass({
+			timestampWrites: this.timer.getTimestampWrites(),
+		});
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.contextBindGroup);
 
 		// Dispatch with 4x4x4 workgroup size
-		const workgroupsPerDim = Math.ceil(gridSize / 8 / 4);
+		const workgroupsPerDim = Math.ceil(gridSize / compression / 4);
 		pass.dispatchWorkgroups(
 			workgroupsPerDim,
 			workgroupsPerDim,
@@ -111,9 +117,12 @@ export class Cull {
 		);
 		pass.end();
 
+		this.timer.resolveTimestamps(encoder);
+
 		// Start async readback if not already in progress
 		this.framesSinceUpdate++;
-		if (!this.readbackInProgress && this.framesSinceUpdate >= 2) { // Update every 2 frames
+		if (!this.readbackInProgress && this.framesSinceUpdate >= 2) {
+			// Update every 2 frames
 			this.startAsyncReadback();
 			this.framesSinceUpdate = 0;
 		}
@@ -125,17 +134,19 @@ export class Cull {
 		this.readbackInProgress = true;
 
 		// Start async readback without blocking
-		this.performAsyncReadback().then(() => {
-			this.readbackInProgress = false;
-		}).catch((error) => {
-			console.warn("Culling readback failed:", error);
-			this.readbackInProgress = false;
-		});
+		this.performAsyncReadback()
+			.then(() => {
+				this.readbackInProgress = false;
+			})
+			.catch((error) => {
+				console.warn("Culling readback failed:", error);
+				this.readbackInProgress = false;
+			});
 	}
 
 	private async performAsyncReadback(): Promise<void> {
 		// Wait a frame to ensure GPU work is submitted
-		await new Promise(resolve => requestAnimationFrame(resolve));
+		await new Promise((resolve) => requestAnimationFrame(resolve));
 
 		// Atomically copy both counter and indices in the same submission
 		const encoder = device.createCommandEncoder();
@@ -214,5 +225,13 @@ export class Cull {
 
 			console.log("Indices", this.indices);
 		}
+	}
+
+	afterUpdate() {
+		this.timer.readTimestamps();
+	}
+
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 }

@@ -1,4 +1,4 @@
-import {canvas, context, contextUniform, device} from "../index";
+import {canvas, context, contextUniform, device, gridSize, compression} from "../index";
 import shader from "./block.wgsl" with {type: "text"};
 import deferredShader from "./block_deferred.wgsl" with {type: "text"};
 import {Cull} from "./cull";
@@ -127,10 +127,13 @@ export class Block {
 
 		// Draw instances for each mesh chunk (only if culling data is ready)
 		if (this.cull.count > 0 && this.cull.indices && this.cull.indices.length > 0) {
+			const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
 			for (let i = 0; i < this.cull.count && i < this.cull.indices.length; ++i) {
 				const meshIndex = this.cull.indices[i];
-				if (typeof meshIndex === 'number' && isFinite(meshIndex)) {
+				if (typeof meshIndex === 'number' && isFinite(meshIndex) && meshIndex <= maxMeshIndex) {
 					gBufferPass.drawIndirect(this.mesh.commands, meshIndex * 16);
+				} else if (meshIndex > maxMeshIndex) {
+					console.warn(`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`);
 				}
 			}
 		}

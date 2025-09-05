@@ -342,7 +342,7 @@ fn calculateGradient(pos: vec3<i32>) -> vec3<f32> {
 	let dx = getVoxelSafe(pos + vec3(1, 0, 0)) - getVoxelSafe(pos - vec3(1, 0, 0));
 	let dy = getVoxelSafe(pos + vec3(0, 1, 0)) - getVoxelSafe(pos - vec3(0, 1, 0));
 	let dz = getVoxelSafe(pos + vec3(0, 0, 1)) - getVoxelSafe(pos - vec3(0, 0, 1));
-	
+
 	let gradient = vec3<f32>(dx, dy, dz);
 	let length = length(gradient);
 	if (length > 0.0001) {
@@ -377,7 +377,7 @@ fn interpolateVertex(p1: vec3<f32>, p2: vec3<f32>, val1: f32, val2: f32) -> vec3
 	if (abs(val1 - val2) < 0.00001) {
 		return p1;
 	}
-	
+
 	let mu = (isolevel - val1) / (val2 - val1);
 	return p1 + mu * (p2 - p1);
 }
@@ -393,7 +393,7 @@ fn interpolateNormal(n1: vec3<f32>, n2: vec3<f32>, val1: f32, val2: f32) -> vec3
 	if (abs(val1 - val2) < 0.00001) {
 		return normalize(n1);
 	}
-	
+
 	let mu = (isolevel - val1) / (val2 - val1);
 	return normalize(n1 + mu * (n2 - n1));
 }
@@ -411,7 +411,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 			for (var z = 0u; z < COMPRESSION; z++) {
 				let coord = vec3<u32>(x, y, z);
 				let worldPos = vec3<i32>(coord + id * COMPRESSION);
-				
+
 				// Get the 8 corner values of the cube
 				var cubeValues: array<f32, 8>;
 				cubeValues[0] = getVoxelSafe(worldPos + vec3(0, 0, 0));
@@ -466,7 +466,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let p1 = vec3<f32>(worldPos) + CUBE_VERTICES[v1];
 						let p2 = vec3<f32>(worldPos) + CUBE_VERTICES[v2];
 						vertexList[i] = interpolateVertex(p1, p2, cubeValues[v1], cubeValues[v2]);
-						
+
 						// Calculate gradients at cube vertices
 						let n1 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v1]));
 						let n2 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v2]));
@@ -486,19 +486,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let v1 = vertexList[edge1];
 						let v2 = vertexList[edge2];
 						let v3 = vertexList[edge3];
-						
+
 						let n1 = normalList[edge1];
 						let n2 = normalList[edge2];
 						let n3 = normalList[edge3];
-						
+
 						mesh.vertices[mesh.vertexCount] = vec4<f32>(v1, 1.0);
 						mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(v2, 1.0);
 						mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(v3, 1.0);
-						
+
 						mesh.normals[mesh.vertexCount] = n1;
 						mesh.normals[mesh.vertexCount + 1] = n2;
 						mesh.normals[mesh.vertexCount + 2] = n3;
-						
+
 						mesh.vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
 						break; // End of triangles for this configuration
