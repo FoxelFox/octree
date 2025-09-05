@@ -1,13 +1,13 @@
-import {GPUContext} from "./gpu";
-import {Post} from "./pipeline/post";
-import {ContextUniform} from "./data/context";
-import {Noise} from "./pipeline/noise";
-import {DistanceField} from "./pipeline/distance_field";
-import {FrameGraph} from "./ui/FrameGraph";
-import {Block} from "./pipeline/block";
-import {Mesh} from "./pipeline/mesh";
-import {Cull} from "./pipeline/cull";
-import {VoxelEditor} from "./pipeline/voxel_editor";
+import { GPUContext } from "./gpu";
+import { Post } from "./pipeline/post";
+import { ContextUniform } from "./data/context";
+import { Noise } from "./pipeline/noise";
+import { DistanceField } from "./pipeline/distance_field";
+import { FrameGraph } from "./ui/FrameGraph";
+import { Block } from "./pipeline/block";
+import { Mesh } from "./pipeline/mesh";
+import { Cull } from "./pipeline/cull";
+import { VoxelEditor } from "./pipeline/voxel_editor";
 
 enum PipelineMode {
 	Post,
@@ -29,6 +29,7 @@ export const mouse = gpu.mouse;
 export const camera = gpu.camera;
 export const time = gpu.time;
 export const renderMode = gpu.renderMode;
+export const compression = 8;
 export const contextUniform = new ContextUniform();
 export let pipelineMode = PipelineMode.Block;
 
@@ -129,7 +130,10 @@ async function runOneTimeSetup() {
 	mesh.update(encoder);
 	device.queue.submit([encoder.finish()]);
 	await device.queue.onSubmittedWorkDone();
-	
+
+	// Read back timing info from setup pipelines
+	distanceField.afterUpdate();
+	mesh.afterUpdate();
 
 	// Initialize voxel editor after all systems are ready
 	voxelEditor = new VoxelEditor(block, noise, mesh, cull);
@@ -176,6 +180,9 @@ function loop() {
 
 	post.afterUpdate();
 	block.afterUpdate();
+	mesh.afterUpdate();
+	cull.afterUpdate();
+	distanceField.afterUpdate();
 
 	// Get current renderer's timing based on pipeline mode
 	const currentRenderTime =
@@ -192,14 +199,25 @@ function loop() {
 
 	// Update timing display
 	const stats = frameGraph.getCurrentStats();
-	const editingInstructions = pipelineMode === PipelineMode.Block ?
-		"<br><br>Voxel Editing (Block mode):<br>Left Click: Add voxels<br>Right Click: Remove voxels" : "";
+	const editingInstructions =
+		pipelineMode === PipelineMode.Block
+			? "<br><br>Voxel Editing (Block mode):<br>Left Click: Add voxels<br>Right Click: Remove voxels"
+			: "";
+
+	// Get all pipeline timings
+	const pipelineTimings = `
+		<br><br>Pipeline Timings (ms):<br>
+		Noise: ${noise.octreeTime.toFixed(3)}<br>
+		Distance Field: ${distanceField.renderTime.toFixed(3)}<br>
+		Mesh: ${mesh.renderTime.toFixed(3)}<br>
+		Cull: ${cull.renderTime.toFixed(3)}<br>
+		Voxel Editor: ${voxelEditor ? voxelEditor.renderTime.toFixed(3) : "0.000"}`;
 
 	timingDiv.innerHTML = `
 		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
 		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
-		Meshlets: ${cull.count}${editingInstructions}
+		Meshlets: ${cull.count}${pipelineTimings}${editingInstructions}
 	`;
 
 	requestAnimationFrame(loop);
@@ -231,23 +249,36 @@ function handleVoxelEditing() {
 	isEditingVoxel = true;
 
 	// Read position at screen center (async but non-blocking)
-	voxelEditor.readPositionAtCenter().then(worldPosition => {
-		if (worldPosition && voxelEditor.hasGeometryAtCenter()) {
-			const editRadius = 10.0; // Configurable brush size
+	voxelEditor
+		.readPositionAtCenter()
+		.then((worldPosition) => {
+			if (worldPosition && voxelEditor.hasGeometryAtCenter()) {
+				const editRadius = 10.0; // Configurable brush size
 
-			if (leftJustPressed) {
-				// Left click: Add voxels (now non-blocking)
-				voxelEditor.addVoxels(worldPosition, editRadius);
-				console.log("Queued add voxels at:", worldPosition[0], worldPosition[1], worldPosition[2]);
-			} else if (rightJustPressed) {
-				// Right click: Remove voxels (now non-blocking)
-				voxelEditor.removeVoxels(worldPosition, editRadius);
-				console.log("Queued remove voxels at:", worldPosition[0], worldPosition[1], worldPosition[2]);
+				if (leftJustPressed) {
+					// Left click: Add voxels (now non-blocking)
+					voxelEditor.addVoxels(worldPosition, editRadius);
+					console.log(
+						"Queued add voxels at:",
+						worldPosition[0],
+						worldPosition[1],
+						worldPosition[2],
+					);
+				} else if (rightJustPressed) {
+					// Right click: Remove voxels (now non-blocking)
+					voxelEditor.removeVoxels(worldPosition, editRadius);
+					console.log(
+						"Queued remove voxels at:",
+						worldPosition[0],
+						worldPosition[1],
+						worldPosition[2],
+					);
+				}
 			}
-		}
-		isEditingVoxel = false;
-	}).catch(error => {
-		console.error("Error during voxel editing:", error);
-		isEditingVoxel = false;
-	});
+			isEditingVoxel = false;
+		})
+		.catch((error) => {
+			console.error("Error during voxel editing:", error);
+			isEditingVoxel = false;
+		});
 }

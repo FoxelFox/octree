@@ -1,6 +1,7 @@
-import {contextUniform, device, gridSize} from "../index";
+import { compression, contextUniform, device, gridSize } from "../index";
 import shader from "./mesh.wgsl";
-import {Noise} from "./noise";
+import { Noise } from "./noise";
+import { RenderTimer } from "./timing";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
@@ -9,15 +10,18 @@ export class Mesh {
 	meshes: GPUBuffer;
 	commands: GPUBuffer;
 	density: GPUBuffer;
+	timer: RenderTimer;
 
 	init(noise: Noise) {
-		const sSize = gridSize / 8;
+		this.timer = new RenderTimer("mesh");
+
+		const sSize = gridSize / compression;
 		const maxMeshCount = sSize * sSize * sSize;
 		const maxMeshSize =
-			4           // vertexCount (u32 = 4 bytes)
-			+ 12        // padding to align vertices array to 16-byte boundary
-			+ 1280 * 16 // vertices (vec4<f32> = 16 bytes each)
-			+ 1280 * 16 // normals (vec3<f32> = 16 bytes each in array, padded)
+			4 + // vertexCount (u32 = 4 bytes)
+			12 + // padding to align vertices array to 16-byte boundary
+			1280 * 16 + // vertices (vec4<f32> = 16 bytes each)
+			1280 * 16; // normals (vec3<f32> = 16 bytes each in array, padded)
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,
@@ -34,9 +38,7 @@ export class Mesh {
 
 		this.density = device.createBuffer({
 			size: 4 * maxMeshCount,
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_SRC
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
 		const shaderModule = device.createShaderModule({
@@ -58,19 +60,19 @@ export class Mesh {
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: noise.noiseBuffer}, // Input
+					resource: { buffer: noise.noiseBuffer }, // Input
 				},
 				{
 					binding: 1,
-					resource: {buffer: this.meshes}, // Output
+					resource: { buffer: this.meshes }, // Output
 				},
 				{
 					binding: 2,
-					resource: {buffer: this.commands}, // Output
+					resource: { buffer: this.commands }, // Output
 				},
 				{
 					binding: 3,
-					resource: {buffer: this.density}, // Output
+					resource: { buffer: this.density }, // Output
 				},
 			],
 		});
@@ -81,25 +83,37 @@ export class Mesh {
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
+					resource: { buffer: contextUniform.uniformBuffer },
 				},
 			],
 		});
 	}
 
 	update(encoder: GPUCommandEncoder) {
-		const pass = encoder.beginComputePass();
+		const pass = encoder.beginComputePass({
+			timestampWrites: this.timer.getTimestampWrites(),
+		});
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.contextBindGroup);
 
 		// Dispatch with 4x4x4 workgroup size
-		const workgroupsPerDim = Math.ceil(gridSize / 8 / 4);
+		const workgroupsPerDim = Math.ceil(gridSize / compression / 4);
 		pass.dispatchWorkgroups(
 			workgroupsPerDim,
 			workgroupsPerDim,
 			workgroupsPerDim,
 		);
 		pass.end();
+
+		this.timer.resolveTimestamps(encoder);
+	}
+
+	afterUpdate() {
+		this.timer.readTimestamps();
+	}
+
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 }

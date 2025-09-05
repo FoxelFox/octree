@@ -1,13 +1,17 @@
 import {contextUniform, device, gridSize} from "../index";
 import shader from "./distance_field.wgsl" with {type: "text"};
+import {RenderTimer} from "./timing";
 
 export class DistanceField {
 	computePipeline!: GPUComputePipeline;
 	bindGroup!: GPUBindGroup;
 	distanceFieldBuffer!: GPUBuffer;
 	contextBindGroup: GPUBindGroup;
+	timer: RenderTimer;
 
 	async init(noiseBuffer: GPUBuffer, contextUniformBuffer: GPUBuffer) {
+		this.timer = new RenderTimer("distance_field");
+		
 		// Create distance field buffer (f32 distance + u32 material_id = 8 bytes per entry)
 		const totalVoxels = gridSize * gridSize * gridSize;
 		this.distanceFieldBuffer = device.createBuffer({
@@ -54,7 +58,9 @@ export class DistanceField {
 	}
 
 	update(encoder: GPUCommandEncoder) {
-		const pass = encoder.beginComputePass();
+		const pass = encoder.beginComputePass({
+			timestampWrites: this.timer.getTimestampWrites(),
+		});
 		pass.setPipeline(this.computePipeline);
 		pass.setBindGroup(0, this.bindGroup);
 		pass.setBindGroup(1, this.contextBindGroup); // Context uniform
@@ -63,6 +69,16 @@ export class DistanceField {
 		const workgroupsPerDim = Math.ceil(gridSize / 4);
 		pass.dispatchWorkgroups(workgroupsPerDim, workgroupsPerDim, workgroupsPerDim);
 		pass.end();
+
+		this.timer.resolveTimestamps(encoder);
+	}
+
+	afterUpdate() {
+		this.timer.readTimestamps();
+	}
+
+	get renderTime(): number {
+		return this.timer.renderTime;
 	}
 
 	getDistanceFieldBuffer(): GPUBuffer {

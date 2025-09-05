@@ -32,7 +32,7 @@ fn randomColor(meshIndex: u32) -> vec3<f32> {
     let h1 = hash(meshIndex);
     let h2 = hash(meshIndex + 1u);
     let h3 = hash(meshIndex + 2u);
-    
+
     return vec3<f32>(
         f32(h1 & 0xFFu) / 255.0,
         f32(h2 & 0xFFu) / 255.0,
@@ -47,18 +47,18 @@ fn vs_main(
       @builtin(instance_index) instanceIndex: u32
 ) -> VertexOutput {
 	var out: VertexOutput;
-	
+
 	// Generate color once per vertex based on mesh index
-	//out.color = randomColor(instanceIndex);
-	out.color = vec3(1,1,1);
-	
+	out.color = randomColor(instanceIndex);
+	//out.color = vec3(1,1,1);
+
 	// Get world position
 	let world_pos = meshes[instanceIndex].vertices[vertexIndex].xyz;
 	out.world_pos = world_pos;
-	
+
 	// Use stored normal
 	out.normal = meshes[instanceIndex].normals[vertexIndex];
-	
+
 	out.position = context.perspective * context.view * meshes[instanceIndex].vertices[vertexIndex];
 	return out;
 }
@@ -73,21 +73,21 @@ struct GBufferOutput {
 @fragment
 fn fm_main(in: VertexOutput) -> GBufferOutput {
     var output: GBufferOutput;
-    
+
     // Extract camera position from inverse view matrix
     let camera_pos = context.inverse_view[3].xyz;
-    
+
     // Calculate distance from camera for depth
     let distance = length(camera_pos - in.world_pos);
-    
+
     // Output world position and depth
     output.position = vec4<f32>(in.world_pos, distance);
-    
+
     // Output world normal
     output.normal = vec4<f32>(normalize(in.normal), 1.0);
-    
+
     // Output diffuse color
     output.diffuse = vec4<f32>(in.color, 1.0);
-    
+
     return output;
 }
