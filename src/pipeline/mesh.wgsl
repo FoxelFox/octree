@@ -16,6 +16,7 @@ struct Command {
 // Input
 @group(0) @binding(0) var<storage, read> voxel: array<f32>;
 @group(1) @binding(0) var<uniform> context: Context;
+@group(1) @binding(1) var<uniform> offset: vec3<u32>;
 
 // Output
 @group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
@@ -403,14 +404,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	var mesh = Mesh();
 	var command = Command();
-	let index = to1DSmall(id);
+	let actualId = id + offset;
+	let sSize = context.grid_size / COMPRESSION;
+	let index = to1DSmall(actualId);
 	density[index] = 0;
 
 	for (var x = 0u; x < COMPRESSION; x++) {
 		for (var y = 0u; y < COMPRESSION; y++) {
 			for (var z = 0u; z < COMPRESSION; z++) {
 				let coord = vec3<u32>(x, y, z);
-				let worldPos = vec3<i32>(coord + id * COMPRESSION);
+				let worldPos = vec3<i32>(coord + actualId * COMPRESSION);
 
 				// Get the 8 corner values of the cube
 				var cubeValues: array<f32, 8>;
@@ -482,7 +485,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					let edge3 = triangleConfig[i + 2];
 
 					// Ensure we don't exceed vertex buffer capacity
-					if (mesh.vertexCount + 3 <= 1152 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
+					if (mesh.vertexCount + 3 <= 1280 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
 						let v1 = vertexList[edge1];
 						let v2 = vertexList[edge2];
 						let v3 = vertexList[edge3];

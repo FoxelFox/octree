@@ -13,6 +13,11 @@ interface VoxelEditCommand {
 	timestamp: number;
 }
 
+interface ChangeBounds {
+	min: [number, number, number];
+	max: [number, number, number];
+}
+
 export class VoxelEditor {
 	// Dependencies
 	private block: Block;
@@ -38,6 +43,7 @@ export class VoxelEditor {
 	private editQueue: VoxelEditCommand[] = [];
 	private isProcessingEdits = false;
 	private pendingMeshUpdate = false;
+	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
 	constructor(block: Block, noise: Noise, mesh: Mesh, cull: Cull) {
@@ -221,9 +227,13 @@ export class VoxelEditor {
 		const commandsToProcess = [...this.editQueue];
 		this.editQueue.length = 0; // Clear the queue
 
+		// Reset change bounds for this batch
+		this.changeBounds = null;
+
 		// Execute all commands without blocking
 		commandsToProcess.forEach(command => {
 			this.executeEditCommand(command);
+			this.updateChangeBounds(command.worldPosition, command.radius);
 		});
 
 		// Schedule mesh regeneration if any edits were processed
@@ -291,14 +301,40 @@ export class VoxelEditor {
 	}
 
 	/**
+	 * Update the bounds of changed areas
+	 */
+	private updateChangeBounds(worldPosition: Float32Array, radius: number) {
+		const minBound = [
+			worldPosition[0] - radius,
+			worldPosition[1] - radius,
+			worldPosition[2] - radius
+		] as [number, number, number];
+		const maxBound = [
+			worldPosition[0] + radius,
+			worldPosition[1] + radius,
+			worldPosition[2] + radius
+		] as [number, number, number];
+
+		if (!this.changeBounds) {
+			this.changeBounds = { min: minBound, max: maxBound };
+		} else {
+			// Expand existing bounds
+			for (let i = 0; i < 3; i++) {
+				this.changeBounds.min[i] = Math.min(this.changeBounds.min[i], minBound[i]);
+				this.changeBounds.max[i] = Math.max(this.changeBounds.max[i], maxBound[i]);
+			}
+		}
+	}
+
+	/**
 	 * Regenerate meshes asynchronously
 	 */
 	private regenerateMeshesAsync() {
 		// Generate new meshes from modified voxel data
 		const encoder = device.createCommandEncoder({label: "Async Mesh Regeneration"});
 
-		// Update mesh generation
-		this.mesh.update(encoder);
+		// Update mesh generation with change bounds
+		this.mesh.update(encoder, this.changeBounds);
 
 		device.queue.submit([encoder.finish()]);
 	}

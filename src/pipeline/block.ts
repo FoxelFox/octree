@@ -1,6 +1,7 @@
 import {canvas, context, contextUniform, device, gridSize, compression} from "../index";
 import shader from "./block.wgsl" with {type: "text"};
 import deferredShader from "./block_deferred.wgsl" with {type: "text"};
+import spaceBackgroundShader from "./space_background.wgsl" with {type: "text"};
 import {Cull} from "./cull";
 import {Mesh} from "./mesh";
 import {RenderTimer} from "./timing";
@@ -19,6 +20,12 @@ export class Block {
 	deferredPipeline: GPURenderPipeline;
 	deferredBindGroup: GPUBindGroup;
 	deferredUniformBindGroup: GPUBindGroup;
+	deferredSpaceBindGroup: GPUBindGroup;
+
+	// Space background
+	spaceBackgroundTexture: GPUTexture;
+	spaceBackgroundPipeline: GPUComputePipeline;
+	spaceBackgroundBindGroup: GPUBindGroup;
 
 	initialized: boolean;
 	timer: RenderTimer;
@@ -33,6 +40,7 @@ export class Block {
 	constructor() {
 		this.timer = new RenderTimer("block");
 		this.createGBufferTextures();
+		this.createSpaceBackgroundTexture();
 	}
 
 
@@ -74,9 +82,38 @@ export class Block {
 		});
 	}
 
+	createSpaceBackgroundTexture() {
+		// Destroy existing texture
+		if (this.spaceBackgroundTexture) this.spaceBackgroundTexture.destroy();
+
+		// Create space background texture (2048x1024 for good quality)
+		this.spaceBackgroundTexture = device.createTexture({
+			size: { width: 2048, height: 1024 },
+			format: "rgba8unorm",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+		});
+	}
+
+	generateSpaceBackground(commandEncoder: GPUCommandEncoder) {
+		// Generate space background texture once using compute shader
+		const computePass = commandEncoder.beginComputePass({
+			label: "Generate Space Background",
+		});
+
+		computePass.setPipeline(this.spaceBackgroundPipeline);
+		computePass.setBindGroup(0, this.spaceBackgroundBindGroup);
+		computePass.dispatchWorkgroups(
+			Math.ceil(2048 / 8), // workgroup size is 8x8
+			Math.ceil(1024 / 8)
+		);
+		computePass.end();
+	}
+
 	update(commandEncoder: GPUCommandEncoder) {
 		if (!this.initialized) {
 			this.init();
+			// Generate space background texture once after initialization
+			this.generateSpaceBackground(commandEncoder);
 		}
 
 		// Recreate G-buffer textures if canvas size changed
@@ -156,6 +193,7 @@ export class Block {
 		deferredPass.setPipeline(this.deferredPipeline);
 		deferredPass.setBindGroup(0, this.deferredUniformBindGroup);
 		deferredPass.setBindGroup(1, this.deferredBindGroup);
+		deferredPass.setBindGroup(2, this.deferredSpaceBindGroup);
 		deferredPass.draw(6); // Full-screen quad
 
 		deferredPass.end();
@@ -186,6 +224,27 @@ export class Block {
 
 
 	init() {
+		// Create space background compute pipeline
+		this.spaceBackgroundPipeline = device.createComputePipeline({
+			label: "Space Background Generation",
+			layout: "auto",
+			compute: {
+				module: device.createShaderModule({
+					label: "Space Background Compute Shader",
+					code: spaceBackgroundShader,
+				}),
+			},
+		});
+
+		// Create space background bind group
+		this.spaceBackgroundBindGroup = device.createBindGroup({
+			label: "Space Background",
+			layout: this.spaceBackgroundPipeline.getBindGroupLayout(0),
+			entries: [
+				{binding: 0, resource: this.spaceBackgroundTexture.createView()},
+			],
+		});
+
 		// Create G-buffer pipeline
 		this.gBufferPipeline = device.createRenderPipeline({
 			label: "Block G-Buffer",
@@ -263,6 +322,15 @@ export class Block {
 		});
 
 		this.createDeferredBindGroup();
+
+		// Create deferred space bind group for space background texture
+		this.deferredSpaceBindGroup = device.createBindGroup({
+			label: "Deferred Space Background",
+			layout: this.deferredPipeline.getBindGroupLayout(2),
+			entries: [
+				{binding: 0, resource: this.spaceBackgroundTexture.createView()},
+			],
+		});
 
 		this.initialized = true;
 	}

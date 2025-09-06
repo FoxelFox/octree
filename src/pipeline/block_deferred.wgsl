@@ -4,7 +4,7 @@
 const HIT_THRESHOLD = -0.001;
 const FAR_DISTANCE = 10000.0;
 const MAX_LIGHT_DISTANCE = 128.0;
-const AMBIENT_LIGHT = 0.3;
+const AMBIENT_LIGHT = 0.0;
 const BASE_LIGHT_INTENSITY = 0.7;
 const SUNLIGHT_INTENSITY = 0.8;
 const SUNLIGHT_DIRECTION = vec3<f32>(-0.3, -0.7, 0.2);
@@ -16,6 +16,7 @@ const FOG_END = 256.0;
 @group(1) @binding(1) var normalTexture: texture_2d<f32>;
 @group(1) @binding(2) var diffuseTexture: texture_2d<f32>;
 @group(1) @binding(3) var depthTexture: texture_depth_2d;
+@group(2) @binding(0) var space_background_texture: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -36,9 +37,48 @@ fn calculate_background_color_and_ray(uv: vec2<f32>, camera_pos: vec3<f32>) -> v
     return vec4<f32>(abs(ray_dir) * 0.5 + 0.5, 1.0);
 }
 
+// Convert ray direction to UV for texture sampling
+fn ray_direction_to_uv(ray_dir: vec3<f32>) -> vec2<f32> {
+    // Convert cartesian to spherical coordinates
+    let theta = atan2(ray_dir.z, ray_dir.x); // Azimuth
+    let phi = acos(ray_dir.y); // Elevation
+
+    // Convert to UV coordinates
+    let u = (theta + 3.14159265) / (2.0 * 3.14159265); // 0 to 1
+    let v = phi / 3.14159265; // 0 to 1
+
+    return vec2<f32>(u, v);
+}
+
+// Sample space background with separate nebula and stars
+fn sample_space_background(ray_dir: vec3<f32>) -> vec3<f32> {
+    let uv = ray_direction_to_uv(ray_dir);
+    let texture_size = textureDimensions(space_background_texture);
+    let coord = vec2<i32>(uv * vec2<f32>(texture_size));
+    let data = textureLoad(space_background_texture, coord, 0);
+
+    let nebula = data.rgb;
+    let star_intensity = data.a;
+
+    // Reconstruct star color from intensity (approximate original colors)
+    let star_color = vec3<f32>(1.0, 0.9, 0.8) * star_intensity;
+
+    return nebula + star_color;
+}
+
+// Sample only nebula for fog (no stars)
+fn sample_nebula_only(ray_dir: vec3<f32>) -> vec3<f32> {
+    let uv = ray_direction_to_uv(ray_dir);
+    let texture_size = textureDimensions(space_background_texture);
+    let coord = vec2<i32>(uv * vec2<f32>(texture_size));
+    return textureLoad(space_background_texture, coord, 0).rgb; // Only nebula
+}
+
 // Calculate background color from ray direction
 fn calculate_background_color(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
-    return calculate_background_color_and_ray(uv, camera_pos);
+    let ray_dir = calculate_ray_direction(uv, camera_pos);
+    let space_color = sample_space_background(ray_dir);
+    return vec4<f32>(space_color, 1.0);
 }
 
 // Calculate ray direction from UV coordinates
@@ -57,27 +97,34 @@ fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_col
         let falloff_factor = max(0.0, (MAX_LIGHT_DISTANCE - distance) / MAX_LIGHT_DISTANCE);
         camera_light_intensity = falloff_factor * falloff_factor;
     }
-    
+
     // Camera light direction from fragment to camera (light at camera position)
     let camera_light_dir = normalize(camera_pos - world_pos);
     let camera_diffuse = max(dot(world_normal, camera_light_dir), 0.0);
-    
+
     // Sunlight direction (directional light)
     let sun_light_dir = normalize(SUNLIGHT_DIRECTION);
     let sun_diffuse = max(dot(world_normal, sun_light_dir), 0.0);
-    
+
+    // Environment lighting from nebula
+    let env_light_color = sample_nebula_only(world_normal) * 0.4; // Use surface normal as direction
+    let env_lighting = length(env_light_color) * 0.5; // Convert to intensity
+
     // Combine lighting
-    let lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY);
-    
-    // Apply lighting to color
-    let lit_color = diffuse_color * lighting;
-    
-    // Apply fog
+    let base_lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY) + env_lighting;
+
+    // Apply base lighting to color
+    let lit_color = diffuse_color * base_lighting;
+
+    // Add subtle nebula color tinting
+    let final_color = lit_color + env_light_color * 0.1;
+
+    // Apply space fog with nebula only (no stars in fog)
     let view_ray = normalize(world_pos - camera_pos);
-    let fog_color = abs(view_ray) * 0.5 + 0.5;
+    let fog_color = sample_nebula_only(view_ray) * 0.8; // Nebula only, no stars
     let fog_factor = clamp((FOG_END - distance) / (FOG_END - FOG_START), 0.0, 1.0);
-    
-    return mix(fog_color, lit_color, fog_factor);
+
+    return mix(fog_color, final_color, fog_factor);
 }
 
 
@@ -85,14 +132,14 @@ fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_col
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let uv = frag_coord.xy / context.resolution;
     let pixel_coord = vec2<i32>(frag_coord.xy);
-    
+
     // Sample G-buffer data
     let position_data = textureLoad(positionTexture, pixel_coord, 0);
     let depth = textureLoad(depthTexture, pixel_coord, 0);
     let has_geometry = depth < 1.0;
-    
+
     let camera_pos = context.inverse_view[3].xyz;
-    
+
     if (has_geometry) {
         // Render geometry with lighting
         let normal_data = textureLoad(normalTexture, pixel_coord, 0);
@@ -101,7 +148,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let distance = position_data.w;
         let world_normal = normalize(normal_data.xyz);
         let diffuse_color = diffuse_data.xyz;
-        
+
         let lit_color = calculate_lighting(world_pos, world_normal, diffuse_color, camera_pos, distance);
         return vec4<f32>(lit_color, 1.0);
     } else {
