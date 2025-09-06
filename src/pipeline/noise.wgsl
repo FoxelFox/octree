@@ -1,4 +1,5 @@
 #import "perlin.wgsl"
+#import "voronoi.wgsl"
 #import "../data/context.wgsl"
 
 struct Octree {
@@ -85,7 +86,7 @@ fn insert(index: u32, pos: vec3<u32>, depth: u32, data: u32) -> u32 {
 // Generate continuous SDF values instead of binary 0/1
 fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
     // Generate deterministic noise that doesn't depend on time for TAA stability
-    let noise_value = noise3(vec3<f32>(pos) / 20.0);
+    let noise_value = voronoi_noise3(vec3<f32>(pos) / 20.0);
 
     // Convert noise from [0,1] range to SDF values
     // Values > 0.5 become negative (inside), values < 0.5 become positive (outside)

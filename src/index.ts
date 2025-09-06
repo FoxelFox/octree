@@ -199,25 +199,12 @@ function loop() {
 
 	// Update timing display
 	const stats = frameGraph.getCurrentStats();
-	const editingInstructions =
-		pipelineMode === PipelineMode.Block
-			? "<br><br>Voxel Editing (Block mode):<br>Left Click: Add voxels<br>Right Click: Remove voxels"
-			: "";
-
-	// Get all pipeline timings
-	const pipelineTimings = `
-		<br><br>Pipeline Timings (ms):<br>
-		Noise: ${noise.octreeTime.toFixed(3)}<br>
-		Distance Field: ${distanceField.renderTime.toFixed(3)}<br>
-		Mesh: ${mesh.renderTime.toFixed(3)}<br>
-		Cull: ${cull.renderTime.toFixed(3)}<br>
-		Voxel Editor: ${voxelEditor ? voxelEditor.renderTime.toFixed(3) : "0.000"}`;
 
 	timingDiv.innerHTML = `
 		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
 		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
-		Meshlets: ${cull.count}${pipelineTimings}${editingInstructions}
+		Meshlets: ${cull.count}<br>
 	`;
 
 	requestAnimationFrame(loop);
