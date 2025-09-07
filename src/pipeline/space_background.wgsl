@@ -113,15 +113,15 @@ fn generate_nebula(ray_dir: vec3<f32>) -> vec3<f32> {
     let nebula_pos = ray_dir * nebula_scale;
 
     // Multiple layers of nebula
-    let nebula1 = fractal_voronoi3(nebula_pos * 0.5, 3u) * 0.6;
-    let nebula2 = fractal_voronoi3(nebula_pos * 1.2, 2u) * 0.4;
+    let nebula1 = fractal_voronoi3(nebula_pos * 0.5, 6u) * 0.6;
+    let nebula2 = fractal_voronoi3(nebula_pos * 1.2, 4u) * 0.4;
     let nebula3 = voronoi3(nebula_pos * 3.0) * 0.2;
 
     let combined_nebula = nebula1 + nebula2 + nebula3;
 
     // Space nebula colors - keeping similar to original but more space-like
-    let base_color = abs(ray_dir) * 0.3 + 0.1; // Darker base
-    let nebula_color = base_color + vec3<f32>(0.2, 0.1, 0.4) * combined_nebula;
+    let base_color = abs(ray_dir) * 0.5 - 0.1; // Darker base
+    let nebula_color = base_color + vec3<f32>(1.0, 1.0, 1.0) * combined_nebula;
 
     return nebula_color;
 }

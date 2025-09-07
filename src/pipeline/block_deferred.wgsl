@@ -108,16 +108,15 @@ fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_col
 
     // Environment lighting from nebula
     let env_light_color = sample_nebula_only(world_normal) * 0.4; // Use surface normal as direction
-    let env_lighting = length(env_light_color) * 0.5; // Convert to intensity
-
-    // Combine lighting
-    let base_lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY) + env_lighting;
+    
+    // Combine scalar lighting (without environment color)
+    let base_lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY);
 
     // Apply base lighting to color
     let lit_color = diffuse_color * base_lighting;
 
-    // Add subtle nebula color tinting
-    let final_color = lit_color + env_light_color * 0.1;
+    // Add colored environment lighting
+    let final_color = lit_color + diffuse_color * env_light_color;
 
     // Apply space fog with nebula only (no stars in fog)
     let view_ray = normalize(world_pos - camera_pos);
