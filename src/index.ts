@@ -1,18 +1,11 @@
-import { GPUContext } from "./gpu";
-import { Post } from "./pipeline/post";
-import { ContextUniform } from "./data/context";
-import { Noise } from "./pipeline/noise";
-import { DistanceField } from "./pipeline/distance_field";
-import { FrameGraph } from "./ui/FrameGraph";
-import { Block } from "./pipeline/block";
-import { Mesh } from "./pipeline/mesh";
-import { Cull } from "./pipeline/cull";
-import { VoxelEditor } from "./pipeline/voxel_editor";
-
-enum PipelineMode {
-	Post,
-	Block,
-}
+import {GPUContext} from "./gpu";
+import {ContextUniform} from "./data/context";
+import {Noise} from "./pipeline/noise";
+import {FrameGraph} from "./ui/FrameGraph";
+import {Block} from "./pipeline/block";
+import {Mesh} from "./pipeline/mesh";
+import {Cull} from "./pipeline/cull";
+import {VoxelEditor} from "./pipeline/voxel_editor";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -28,42 +21,21 @@ export const canvas = gpu.canvas;
 export const mouse = gpu.mouse;
 export const camera = gpu.camera;
 export const time = gpu.time;
-export const renderMode = gpu.renderMode;
 export const compression = 8;
 export const contextUniform = new ContextUniform();
-export let pipelineMode = PipelineMode.Block;
 
 console.log("maxDepth:", maxDepth);
 console.log("gridSize:", gridSize);
 
 const uniforms = [contextUniform];
 
-document.addEventListener("keydown", (ev) => {
-	switch (ev.code) {
-		case "KeyP":
-			pipelineMode++;
-			if (pipelineMode >= Object.keys(PipelineMode).length / 2) {
-				pipelineMode = 0;
-			}
-			console.log(
-				"Pipeline mode switched to:",
-				pipelineMode === PipelineMode.Post ? "Post" : "Block",
-			);
-			break;
-	}
-});
-
 // --- Setup Pipelines ---
 const noise = new Noise();
-const distanceField = new DistanceField();
-const post = new Post();
 const block = new Block();
 const mesh = new Mesh();
 const cull = new Cull();
 block.mesh = mesh;
 block.cull = cull;
-post.noise = noise;
-post.distanceField = distanceField;
 
 // --- Voxel Editor ---
 let voxelEditor: VoxelEditor;
@@ -114,11 +86,6 @@ async function runOneTimeSetup() {
 	// Explicitly wait for the GPU to finish all submitted work.
 	await device.queue.onSubmittedWorkDone();
 
-	// Now that we know the GPU is done, read back the data.
-	await noise.readback();
-
-	// Initialize distance field after noise pipeline
-	await distanceField.init(noise.noiseBuffer, contextUniform.uniformBuffer);
 	mesh.init(noise);
 	cull.init(noise, mesh);
 
@@ -126,13 +93,10 @@ async function runOneTimeSetup() {
 	console.log("Generating distance field...");
 	const encoder = device.createCommandEncoder();
 
-	distanceField.update(encoder);
 	mesh.update(encoder);
 	device.queue.submit([encoder.finish()]);
 	await device.queue.onSubmittedWorkDone();
 
-	// Read back timing info from setup pipelines
-	distanceField.afterUpdate();
 	mesh.afterUpdate();
 
 	// Initialize voxel editor after all systems are ready
@@ -155,7 +119,7 @@ function loop() {
 	gpu.update();
 
 	// Handle voxel editing when pointer is locked and in Block mode
-	if (voxelEditor && gpu.mouse.locked && pipelineMode === PipelineMode.Block) {
+	if (voxelEditor && gpu.mouse.locked) {
 		handleVoxelEditing();
 	}
 
@@ -165,29 +129,19 @@ function loop() {
 
 	const updateEncoder = device.createCommandEncoder();
 
-	switch (pipelineMode) {
-		case PipelineMode.Post:
-			post.update(updateEncoder);
-			break;
-		case PipelineMode.Block:
-			// Update culling every frame (async on GPU)
-			cull.update(updateEncoder);
-			block.update(updateEncoder);
-			break;
-	}
+	// Update culling every frame (async on GPU)
+	cull.update(updateEncoder);
+	block.update(updateEncoder);
+
 
 	device.queue.submit([updateEncoder.finish()]);
 
-	post.afterUpdate();
 	block.afterUpdate();
 	mesh.afterUpdate();
 	cull.afterUpdate();
-	distanceField.afterUpdate();
 
 	// Get current renderer's timing based on pipeline mode
-	const currentRenderTime =
-		pipelineMode === PipelineMode.Post ? post.renderTime : block.renderTime;
-	const currentModeName = pipelineMode === PipelineMode.Post ? "Post" : "Block";
+	const currentRenderTime = block.renderTime;
 
 	// Update frame graph with GPU render time from active renderer
 	frameGraph.addFrameTime(currentRenderTime);

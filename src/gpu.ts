@@ -1,6 +1,3 @@
-// Global TAA state that can be modified
-export let taaToggleState = {enabled: false};
-
 export class GPUContext {
 	device: GPUDevice;
 	context: GPUCanvasContext;
@@ -26,11 +23,6 @@ export class GPUContext {
 	time: {
 		now: number;
 		delta: number;
-	};
-	renderMode: {
-		current: number;
-		modes: string[];
-		lastLKeyPressed: boolean;
 	};
 	taaToggle: {
 		lastTKeyPressed: boolean;
@@ -59,18 +51,6 @@ export class GPUContext {
 			speed: 16,
 		};
 		this.time = {now: 0, delta: 0};
-		this.renderMode = {
-			current: 0,
-			modes: [
-				"Octree Normal",
-				"Octree Heatmap",
-				"SDF Normal",
-				"SDF Heatmap",
-				"Hybrid Normal",
-				"Hybrid Heatmap",
-			],
-			lastLKeyPressed: false,
-		};
 		this.taaToggle = {
 			lastTKeyPressed: false,
 		};
@@ -145,8 +125,6 @@ export class GPUContext {
 		this.time.delta = now - this.time.now;
 		this.time.now = now;
 		this.updateCamera();
-		this.updateRenderMode();
-		this.updateTaaToggle();
 	}
 
 	setCanvasSize = () => {
@@ -248,30 +226,4 @@ export class GPUContext {
 		}
 	}
 
-	updateRenderMode() {
-		const lKeyPressed = this.keys.has("keyl");
-
-		// Toggle render mode when L key is pressed (edge detection)
-		if (lKeyPressed && !this.renderMode.lastLKeyPressed) {
-			this.renderMode.current =
-				(this.renderMode.current + 1) % this.renderMode.modes.length;
-			console.log(
-				`Render mode: ${this.renderMode.modes[this.renderMode.current]}`,
-			);
-		}
-
-		this.renderMode.lastLKeyPressed = lKeyPressed;
-	}
-
-	updateTaaToggle() {
-		const tKeyPressed = this.keys.has("keyt");
-
-		// Toggle TAA when T key is pressed (edge detection)
-		if (tKeyPressed && !this.taaToggle.lastTKeyPressed) {
-			taaToggleState.enabled = !taaToggleState.enabled;
-			console.log(`TAA ${taaToggleState.enabled ? "enabled" : "disabled"}`);
-		}
-
-		this.taaToggle.lastTKeyPressed = tKeyPressed;
-	}
 }

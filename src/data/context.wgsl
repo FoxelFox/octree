@@ -14,14 +14,11 @@ struct Context {
   jitter_offset: vec2<f32>,
   camera_velocity: vec3<f32>,
   frame_count: u32,
-  render_mode: u32, // 0=normal, 1=heatmap, 2=sdf_normal, 3=sdf_heatmap, 4=hybrid_normal, 5=hybrid_heatmap
   random_seed: f32,
   // Distance field parameters
   sdf_epsilon: f32,
   sdf_max_steps: u32,
   sdf_over_relaxation: f32,
-  // TAA toggle
-  taa_enabled: u32,
   // Hybrid parameters
   hybrid_threshold: f32, // Node size threshold for switching to SDF
 }
