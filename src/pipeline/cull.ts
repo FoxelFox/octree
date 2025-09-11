@@ -183,50 +183,6 @@ export class Cull {
 		this.count = newCount;
 	}
 
-	async readback(): Promise<void> {
-		{
-			// first read how many indices we have
-			const encoder = device.createCommandEncoder();
-			encoder.copyBufferToBuffer(
-				this.counter,
-				0,
-				this.counterReadback,
-				0,
-				this.counter.size,
-			);
-			device.queue.submit([encoder.finish()]);
-
-			await this.counterReadback.mapAsync(GPUMapMode.READ);
-			const data = this.counterReadback.getMappedRange();
-			this.count = new Uint32Array(data)[0];
-			this.counterReadback.unmap();
-
-			console.log("Index Count", this.count);
-		}
-
-		await device.queue.onSubmittedWorkDone();
-
-		{
-			// now only read the indices we need
-			const encoder = device.createCommandEncoder();
-			encoder.copyBufferToBuffer(
-				this.indicesBuffer,
-				0,
-				this.indicesReadback,
-				0,
-				this.count * 4,
-			);
-			device.queue.submit([encoder.finish()]);
-
-			await this.indicesReadback.mapAsync(GPUMapMode.READ);
-			const data = this.indicesReadback.getMappedRange();
-			this.indices = new Uint32Array(data.slice());
-			this.indicesReadback.unmap();
-
-			console.log("Indices", this.indices);
-		}
-	}
-
 	afterUpdate() {
 		this.timer.readTimestamps();
 	}

@@ -75,9 +75,7 @@ export class GPUContext {
 			if (!navigator.gpu) {
 				errorMessage = "WebGPU not supported in this browser";
 			} else {
-				const adapter = await navigator.gpu.requestAdapter({
-					powerPreference: "high-performance",
-				});
+				const adapter = await navigator.gpu.requestAdapter();
 				if (!adapter) {
 					errorMessage = "No suitable GPU adapter found";
 				} else {

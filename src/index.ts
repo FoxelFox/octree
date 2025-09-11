@@ -83,9 +83,6 @@ async function runOneTimeSetup() {
 
 	device.queue.submit([setupEncoder.finish()]);
 
-	// Explicitly wait for the GPU to finish all submitted work.
-	await device.queue.onSubmittedWorkDone();
-
 	mesh.init(noise);
 	cull.init(noise, mesh);
 
@@ -95,7 +92,6 @@ async function runOneTimeSetup() {
 
 	mesh.update(encoder);
 	device.queue.submit([encoder.finish()]);
-	await device.queue.onSubmittedWorkDone();
 
 	mesh.afterUpdate();
 
