@@ -1,15 +1,8 @@
 #import "../data/context.wgsl"
 
 // Constants
-const HIT_THRESHOLD = -0.001;
-const FAR_DISTANCE = 10000.0;
-const MAX_LIGHT_DISTANCE = 128.0;
-const AMBIENT_LIGHT = 0.0;
-const BASE_LIGHT_INTENSITY = 0.7;
-const SUNLIGHT_INTENSITY = 0.8;
-const SUNLIGHT_DIRECTION = vec3<f32>(-0.3, -0.7, 0.2);
-const FOG_START = 50.0;
-const FOG_END = 256.0;
+const FOG_START = 256.0;
+const FOG_END = 1024.0;
 
 @group(0) @binding(0) var<uniform> context: Context;
 @group(1) @binding(0) var positionTexture: texture_2d<f32>;
@@ -17,6 +10,7 @@ const FOG_END = 256.0;
 @group(1) @binding(2) var diffuseTexture: texture_2d<f32>;
 @group(1) @binding(3) var depthTexture: texture_depth_2d;
 @group(2) @binding(0) var space_background_texture: texture_2d<f32>;
+@group(3) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -89,38 +83,123 @@ fn calculate_ray_direction(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
     return normalize(world_pos_bg.xyz - camera_pos);
 }
 
-// Calculate lighting for a given world position and surface properties
-fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_color: vec3<f32>, camera_pos: vec3<f32>, distance: f32) -> vec3<f32> {
-    // Calculate distance attenuation for camera light
-    var camera_light_intensity = BASE_LIGHT_INTENSITY;
-    if (distance > 0.0) {
-        let falloff_factor = max(0.0, (MAX_LIGHT_DISTANCE - distance) / MAX_LIGHT_DISTANCE);
-        camera_light_intensity = falloff_factor * falloff_factor;
+// Convert world position to compressed grid coordinates
+fn worldToCompressedGrid(world_pos: vec3<f32>) -> vec3<f32> {
+    return world_pos / COMPRESSION;
+}
+
+// Sample light data from the compressed grid using trilinear interpolation
+fn sampleLightData(world_pos: vec3<f32>) -> vec2<f32> {
+    let grid_pos = worldToCompressedGrid(world_pos);
+    let size = f32(context.grid_size / COMPRESSION);
+
+    // Clamp to grid bounds
+    let clamped_pos = clamp(grid_pos, vec3<f32>(0.0), vec3<f32>(size - 1.0));
+
+    // Get integer coordinates for the 8 surrounding cells
+    let base_pos = floor(clamped_pos);
+    let fract_pos = clamped_pos - base_pos;
+
+    // Sample 8 neighboring light values for trilinear interpolation
+    let p000 = getLightDataAtGrid(vec3<i32>(base_pos));
+    let p001 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(0.0, 0.0, 1.0)));
+    let p010 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(0.0, 1.0, 0.0)));
+    let p011 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(0.0, 1.0, 1.0)));
+    let p100 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(1.0, 0.0, 0.0)));
+    let p101 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(1.0, 0.0, 1.0)));
+    let p110 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(1.0, 1.0, 0.0)));
+    let p111 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(1.0, 1.0, 1.0)));
+
+    // Trilinear interpolation
+    let c00 = mix(p000, p100, fract_pos.x);
+    let c01 = mix(p001, p101, fract_pos.x);
+    let c10 = mix(p010, p110, fract_pos.x);
+    let c11 = mix(p011, p111, fract_pos.x);
+
+    let c0 = mix(c00, c10, fract_pos.y);
+    let c1 = mix(c01, c11, fract_pos.y);
+
+    return mix(c0, c1, fract_pos.z);
+}
+
+// Get light data at specific grid coordinates (with bounds checking)
+fn getLightDataAtGrid(grid_pos: vec3<i32>) -> vec2<f32> {
+    let size = i32(context.grid_size / COMPRESSION);
+
+    // Check bounds
+    if (grid_pos.x < 0 || grid_pos.y < 0 || grid_pos.z < 0 ||
+        grid_pos.x >= size || grid_pos.y >= size || grid_pos.z >= size) {
+        return vec2<f32>(0.0, 1.0); // No light, full shadow outside bounds
     }
 
-    // Camera light direction from fragment to camera (light at camera position)
-    let camera_light_dir = normalize(camera_pos - world_pos);
-    let camera_diffuse = max(dot(world_normal, camera_light_dir), 0.0);
+    let index = u32(grid_pos.z * size * size + grid_pos.y * size + grid_pos.x);
+    return light_data[index];
+}
 
-    // Sunlight direction (directional light)
-    let sun_light_dir = normalize(SUNLIGHT_DIRECTION);
-    let sun_diffuse = max(dot(world_normal, sun_light_dir), 0.0);
+// Sample directional light from the floodfill data
+fn sampleDirectionalLight(world_pos: vec3<f32>, direction: vec3<f32>, step_size: f32) -> f32 {
+    // Sample light in the given direction to simulate directional lighting
+    let sample_pos = world_pos + direction * step_size;
+    let light_info = sampleLightData(sample_pos);
+    return light_info.x; // Light intensity
+}
 
-    // Environment lighting from nebula
-    let env_light_color = sample_nebula_only(world_normal) * 0.4; // Use surface normal as direction
-    
-    // Combine scalar lighting (without environment color)
-    let base_lighting = AMBIENT_LIGHT + (camera_diffuse * camera_light_intensity) + (sun_diffuse * SUNLIGHT_INTENSITY);
+// Calculate lighting for a given world position and surface properties
+fn calculate_lighting(world_pos: vec3<f32>, world_normal: vec3<f32>, diffuse_color: vec3<f32>, camera_pos: vec3<f32>, distance: f32) -> vec3<f32> {
+    // Sample voxel-based lighting data at surface
+    let light_info = sampleLightData(world_pos);
+    let base_light_intensity = light_info.x; // R channel: light intensity
+    let shadow_factor = light_info.y;        // G channel: shadow factor
 
-    // Apply base lighting to color
-    let lit_color = diffuse_color * base_lighting;
+    // Create directional lighting effect by sampling light from different directions
+    // This simulates how surfaces facing light sources should be brighter
 
-    // Add colored environment lighting
-    let final_color = lit_color + diffuse_color * env_light_color;
+    // Primary skylight direction (from above)
+    let sky_dir = vec3<f32>(0.0, 1.0, 0.0);
+    let sky_light = sampleDirectionalLight(world_pos, sky_dir, 4.0);
+    let sky_contribution = max(dot(-world_normal, sky_dir), 0.0) * sky_light * 0.8;
 
-    // Apply space fog with nebula only (no stars in fog)
+    // Sample light from multiple directions for better normal response
+    let directions = array<vec3<f32>, 6>(
+        vec3<f32>( 1.0,  0.0,  0.0), // +X
+        vec3<f32>(-1.0,  0.0,  0.0), // -X
+        vec3<f32>( 0.0,  1.0,  0.0), // +Y (up)
+        vec3<f32>( 0.0, -1.0,  0.0), // -Y (down)
+        vec3<f32>( 0.0,  0.0,  1.0), // +Z
+        vec3<f32>( 0.0,  0.0, -1.0)  // -Z
+    );
+
+    var directional_light = 0.0;
+    for (var i = 0; i < 6; i++) {
+        let dir_light = sampleDirectionalLight(world_pos, directions[i], 2.0);
+        let normal_factor = max(dot(-world_normal, directions[i]), 0.0);
+        directional_light += dir_light * normal_factor;
+    }
+    directional_light *= 0.15; // Scale contribution
+
+    // Combine base ambient with directional effects
+    let total_lighting = base_light_intensity * 0.6 + // Base ambient
+                        sky_contribution +             // Sky directional
+                        directional_light;             // Multi-directional
+
+    // Preserve normal contrast while preventing over-brightening
+    // Use a softer approach that maintains relative differences
+    let exposure_adjustment = 1.0 / (1.0 + total_lighting * 0.3); // Soft exposure curve
+    let contrast_preserved_lighting = total_lighting * exposure_adjustment;
+
+    // Allow complete darkness in caves - no minimum lighting
+    let clamped_lighting = clamp(contrast_preserved_lighting, 0.0, 1.1);
+
+    // Apply lighting to surface color
+    let lit_color = diffuse_color * clamped_lighting;
+
+    // Add environment reflection (reduced in dark areas but still present)
+    let env_reflection = sample_nebula_only(world_normal) * 0.08 * (1.0 - shadow_factor);
+    let final_color = lit_color + diffuse_color * env_reflection;
+
+    // Apply space fog
     let view_ray = normalize(world_pos - camera_pos);
-    let fog_color = sample_nebula_only(view_ray) * 0.8; // Nebula only, no stars
+    let fog_color = sample_nebula_only(view_ray) * 0.8;
     let fog_factor = clamp((FOG_END - distance) / (FOG_END - FOG_START), 0.0, 1.0);
 
     return mix(fog_color, final_color, fog_factor);

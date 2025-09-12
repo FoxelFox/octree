@@ -13,9 +13,10 @@ export class Noise {
 	result: Float32Array;
 
 	constructor() {
-		const size = Math.pow(gridSize, 3) * 4;
+		// Each voxel now stores: density (f32) + color (u32) = 8 bytes per voxel
+		const size = Math.pow(gridSize, 3) * 8;
 		this.noiseBuffer = device.createBuffer({
-			label: "Noise",
+			label: "Voxel Data",
 			size,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
 		});

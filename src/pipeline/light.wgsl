@@ -1,0 +1,172 @@
+#import "../data/context.wgsl"
+
+struct LightConfig {
+    max_iterations: f32,
+    light_attenuation: f32,
+    shadow_softness: f32,
+    skylight_intensity: f32,
+    // Reserved for future use - using vec4 for proper 16-byte alignment
+    _padding: vec4<f32>,
+}
+
+// Input: mesh density data
+@group(0) @binding(0) var<storage, read> density: array<u32>;
+
+// Output: light data (RG format - R=light intensity, G=shadow factor)  
+@group(0) @binding(1) var<storage, read_write> light_data: array<vec2<f32>>;
+
+// Configuration
+@group(0) @binding(2) var<uniform> config: LightConfig;
+
+// Context data
+@group(1) @binding(0) var<uniform> context: Context;
+
+// Use the to1DSmall function from context.wgsl
+
+// Check if coordinates are within bounds
+fn isInBounds(pos: vec3<i32>) -> bool {
+    let size = i32(context.grid_size / COMPRESSION);
+    return pos.x >= 0 && pos.y >= 0 && pos.z >= 0 && 
+           pos.x < size && pos.y < size && pos.z < size;
+}
+
+// Get density at position (returns 0 if out of bounds)
+fn getDensity(pos: vec3<i32>) -> f32 {
+    if (!isInBounds(pos)) {
+        return 0.0;
+    }
+    let index = to1DSmall(vec3<u32>(pos));
+    return f32(density[index]) / (COMPRESSION * COMPRESSION * COMPRESSION);
+}
+
+// Get light data at position
+fn getLightData(pos: vec3<i32>) -> vec2<f32> {
+    if (!isInBounds(pos)) {
+        return vec2<f32>(0.0, 1.0); // No light, full shadow outside bounds
+    }
+    let index = to1DSmall(vec3<u32>(pos));
+    return light_data[index];
+}
+
+// Calculate light propagation from neighboring cells
+fn calculateLightPropagation(pos: vec3<i32>) -> vec2<f32> {
+    let current_density = getDensity(pos);
+    let is_solid = current_density > 0.5; // Threshold for solid voxels
+    
+    // If this cell is solid, it blocks light completely
+    if (is_solid) {
+        return vec2<f32>(0.0, 1.0); // No light, full shadow
+    }
+    
+    // Check if we're completely enclosed (cave detection)
+    var solid_neighbors = 0;
+    let cave_check_dirs = array<vec3<i32>, 6>(
+        vec3<i32>( 1,  0,  0), vec3<i32>(-1,  0,  0),
+        vec3<i32>( 0,  1,  0), vec3<i32>( 0, -1,  0),
+        vec3<i32>( 0,  0,  1), vec3<i32>( 0,  0, -1)
+    );
+    
+    for (var i = 0; i < 6; i++) {
+        let neighbor_pos = pos + cave_check_dirs[i];
+        if (getDensity(neighbor_pos) > 0.3) {
+            solid_neighbors++;
+        }
+    }
+    
+    // If surrounded by mostly solid blocks, force darkness (cave)
+    if (solid_neighbors >= 5) {
+        return vec2<f32>(0.0, 1.0); // Force cave darkness
+    }
+    
+    let current_light = getLightData(pos);
+    var max_light = current_light.x;
+    var min_shadow = current_light.y;
+    
+    // Sample light from 6 neighboring directions
+    let directions = array<vec3<i32>, 6>(
+        vec3<i32>( 1,  0,  0), // +X
+        vec3<i32>(-1,  0,  0), // -X
+        vec3<i32>( 0,  1,  0), // +Y (up)
+        vec3<i32>( 0, -1,  0), // -Y (down)
+        vec3<i32>( 0,  0,  1), // +Z
+        vec3<i32>( 0,  0, -1)  // -Z
+    );
+    
+    // Weight factors for different directions (favor upward light propagation)
+    let direction_weights = array<f32, 6>(
+        0.8, 0.8, // Horizontal directions
+        1.2,      // Upward (stronger skylight influence)
+        0.6,      // Downward (less influence)
+        0.8, 0.8  // Other horizontal directions
+    );
+    
+    for (var i = 0; i < 6; i++) {
+        let neighbor_pos = pos + directions[i];
+        let neighbor_light = getLightData(neighbor_pos);
+        let neighbor_density = getDensity(neighbor_pos);
+        
+        // Calculate light transmission through neighbor - be more aggressive about blocking
+        let transmission = 1.0 - min(1.0, neighbor_density * 2.0); // More aggressive blocking
+        var attenuated_light = neighbor_light.x * transmission * config.light_attenuation * direction_weights[i];
+        
+        // Don't propagate light if the neighbor is solid
+        if (neighbor_density > 0.1) {
+            attenuated_light = 0.0;
+        }
+        
+        // Propagate light
+        max_light = max(max_light, attenuated_light);
+        
+        // Calculate shadows - light is blocked by solid neighbors
+        if (neighbor_density > 0.1) {
+            let shadow_strength = neighbor_density * (1.0 - config.shadow_softness);
+            min_shadow = min(min_shadow, shadow_strength);
+        }
+    }
+    
+    // Only add skylight if there's a clear path to the surface
+    let size = f32(context.grid_size / COMPRESSION);
+    let height_factor = f32(pos.y) / (size - 1.0);
+    
+    // Check if there's a clear vertical path to the surface for skylight
+    var has_sky_access = true;
+    for (var check_y = pos.y + 1; check_y < i32(size); check_y++) {
+        let check_pos = vec3<i32>(pos.x, check_y, pos.z);
+        if (getDensity(check_pos) > 0.3) {
+            has_sky_access = false;
+            break;
+        }
+    }
+    
+    // Only apply skylight if there's direct access to sky
+    if (has_sky_access) {
+        let skylight = config.skylight_intensity * height_factor * height_factor;
+        max_light = max(max_light, skylight);
+    }
+    
+    // Remove minimum ambient light - caves should be dark!
+    
+    return vec2<f32>(
+        clamp(max_light, 0.0, 1.0),
+        clamp(min_shadow, 0.0, 1.0)
+    );
+}
+
+@compute @workgroup_size(4, 4, 4)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let size = context.grid_size / COMPRESSION;
+    
+    // Check bounds
+    if (global_id.x >= size || global_id.y >= size || global_id.z >= size) {
+        return;
+    }
+    
+    let pos = vec3<i32>(global_id);
+    let index = to1DSmall(global_id);
+    
+    // Calculate new light values
+    let new_light = calculateLightPropagation(pos);
+    
+    // Store the updated light data
+    light_data[index] = new_light;
+}

@@ -13,33 +13,20 @@ struct Mesh {
 	vertexCount: u32,
 	vertices: array<vec4<f16>, 1280>, // worst case is way larger than 2048
 	normals: array<vec3<f16>, 1280>,
+	colors: array<u32, 1280>, // Packed RGBA colors per vertex
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
 @group(1) @binding(0) var <uniform> context: Context;
 
-// Hash function for pseudo-random color generation
-fn hash(x: u32) -> u32 {
-    var h = x;
-    h ^= h >> 16u;
-    h *= 0x85ebca6bu;
-    h ^= h >> 13u;
-    h *= 0xc2b2ae35u;
-    h ^= h >> 16u;
-    return h;
-}
 
-// Generate random color from mesh index
-fn randomColor(meshIndex: u32) -> vec3<f32> {
-    let h1 = hash(meshIndex);
-    let h2 = hash(meshIndex + 1u);
-    let h3 = hash(meshIndex + 2u);
-
-    return vec3<f32>(
-        f32(h1 & 0xFFu) / 255.0,
-        f32(h2 & 0xFFu) / 255.0,
-        f32(h3 & 0xFFu) / 255.0
-    );
+// Unpack RGBA color from u32
+fn unpackColor(packedColor: u32) -> vec4<f32> {
+    let r = f32(packedColor & 0xFFu) / 255.0;
+    let g = f32((packedColor >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packedColor >> 16u) & 0xFFu) / 255.0;
+    let a = f32((packedColor >> 24u) & 0xFFu) / 255.0;
+    return vec4<f32>(r, g, b, a);
 }
 
 
@@ -50,10 +37,10 @@ fn vs_main(
 ) -> VertexOutput {
 	var out: VertexOutput;
 
-	// Generate color once per vertex based on mesh index
-	//out.color = randomColor(instanceIndex);
-	//out.color = vec3(0.2,1,0);
-	out.color = vec3(1,1,1);
+	// Use per-vertex color from mesh data
+	let packedColor = meshes[instanceIndex].colors[vertexIndex];
+	let vertexColor = unpackColor(packedColor);
+	out.color = vertexColor.rgb;
 
 	// Get world position (convert from f16 to f32)
 	let world_pos = vec3<f32>(meshes[instanceIndex].vertices[vertexIndex].xyz);

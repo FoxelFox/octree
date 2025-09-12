@@ -3,6 +3,7 @@ import {Block} from "./block";
 import {Noise} from "./noise";
 import {Mesh} from "./mesh";
 import {Cull} from "./cull";
+import {Light} from "./light";
 import editShader from "./voxel_edit.wgsl" with {type: "text"};
 import {RenderTimer} from "./timing";
 
@@ -24,6 +25,7 @@ export class VoxelEditor {
 	private noise: Noise;
 	private mesh: Mesh;
 	private cull: Cull;
+	private light: Light;
 
 	// Position reading
 	private positionReadTexture: GPUTexture;
@@ -46,11 +48,12 @@ export class VoxelEditor {
 	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
-	constructor(block: Block, noise: Noise, mesh: Mesh, cull: Cull) {
+	constructor(block: Block, noise: Noise, mesh: Mesh, cull: Cull, light: Light) {
 		this.block = block;
 		this.noise = noise;
 		this.mesh = mesh;
 		this.cull = cull;
+		this.light = light;
 		this.timer = new RenderTimer("voxel_editor");
 
 		this.initPositionReading();
@@ -337,6 +340,9 @@ export class VoxelEditor {
 		this.mesh.update(encoder, this.changeBounds);
 
 		device.queue.submit([encoder.finish()]);
+		
+		// Invalidate lighting after voxel changes
+		this.light.invalidate();
 	}
 
 	/**

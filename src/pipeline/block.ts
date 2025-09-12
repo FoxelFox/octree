@@ -4,12 +4,14 @@ import deferredShader from "./block_deferred.wgsl" with {type: "text"};
 import spaceBackgroundShader from "./space_background.wgsl" with {type: "text"};
 import {Cull} from "./cull";
 import {Mesh} from "./mesh";
+import {Light} from "./light";
 import {RenderTimer} from "./timing";
 
 export class Block {
 	// input
 	mesh: Mesh;
 	cull: Cull;
+	light: Light;
 
 	// G-buffer pass
 	gBufferPipeline: GPURenderPipeline;
@@ -21,6 +23,7 @@ export class Block {
 	deferredBindGroup: GPUBindGroup;
 	deferredUniformBindGroup: GPUBindGroup;
 	deferredSpaceBindGroup: GPUBindGroup;
+	deferredLightBindGroup: GPUBindGroup;
 
 	// Space background
 	spaceBackgroundTexture: GPUTexture;
@@ -194,6 +197,7 @@ export class Block {
 		deferredPass.setBindGroup(0, this.deferredUniformBindGroup);
 		deferredPass.setBindGroup(1, this.deferredBindGroup);
 		deferredPass.setBindGroup(2, this.deferredSpaceBindGroup);
+		deferredPass.setBindGroup(3, this.deferredLightBindGroup);
 		deferredPass.draw(6); // Full-screen quad
 
 		deferredPass.end();
@@ -329,6 +333,15 @@ export class Block {
 			layout: this.deferredPipeline.getBindGroupLayout(2),
 			entries: [
 				{binding: 0, resource: this.spaceBackgroundTexture.createView()},
+			],
+		});
+
+		// Create deferred light bind group for voxel lighting data
+		this.deferredLightBindGroup = device.createBindGroup({
+			label: "Deferred Light Data",
+			layout: this.deferredPipeline.getBindGroupLayout(3),
+			entries: [
+				{binding: 0, resource: {buffer: this.light.getLightBuffer()}},
 			],
 		});
 

@@ -22,7 +22,8 @@ export class Mesh {
 			4 + // vertexCount (u32 = 4 bytes)
 			12 + // padding to align vertices array to 16-byte boundary
 			1280 * 8 + // vertices (vec4<f16> = 8 bytes each)
-			1280 * 8; // normals (vec3<f16> = 8 bytes each in array, padded)
+			1280 * 8 + // normals (vec3<f16> = 8 bytes each in array, padded)
+			1280 * 4; // colors (u32 = 4 bytes each)
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,

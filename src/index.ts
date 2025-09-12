@@ -5,6 +5,7 @@ import { FrameGraph } from "./ui/FrameGraph";
 import { Block } from "./pipeline/block";
 import { Mesh } from "./pipeline/mesh";
 import { Cull } from "./pipeline/cull";
+import { Light } from "./pipeline/light";
 import { VoxelEditor } from "./pipeline/voxel_editor";
 
 export const gpu = new GPUContext();
@@ -31,11 +32,13 @@ const uniforms = [contextUniform];
 
 // --- Setup Pipelines ---
 const noise = new Noise();
+const light = new Light();
 const block = new Block();
 const mesh = new Mesh();
 const cull = new Cull();
 block.mesh = mesh;
 block.cull = cull;
+block.light = light;
 
 // --- Voxel Editor ---
 let voxelEditor: VoxelEditor;
@@ -85,18 +88,21 @@ async function runOneTimeSetup() {
 
 	mesh.init(noise);
 	cull.init(noise, mesh);
+	light.init(mesh);
 
 	// Generate distance field from voxel data
 	console.log("Generating distance field...");
 	const encoder = device.createCommandEncoder();
 
 	mesh.update(encoder);
+	light.update(encoder);
 	device.queue.submit([encoder.finish()]);
 
 	mesh.afterUpdate();
+	light.afterUpdate();
 
 	// Initialize voxel editor after all systems are ready
-	voxelEditor = new VoxelEditor(block, noise, mesh, cull);
+	voxelEditor = new VoxelEditor(block, noise, mesh, cull, light);
 
 	console.log("Setup complete.");
 }
@@ -125,7 +131,8 @@ function loop() {
 
 	const updateEncoder = device.createCommandEncoder();
 
-	// Update culling every frame (async on GPU)
+	// Update lighting and culling every frame (async on GPU)
+	light.update(updateEncoder);
 	cull.update(updateEncoder);
 	block.update(updateEncoder);
 
@@ -134,6 +141,7 @@ function loop() {
 	block.afterUpdate();
 	mesh.afterUpdate();
 	cull.afterUpdate();
+	light.afterUpdate();
 
 	// Get current renderer's timing based on pipeline mode
 	const currentRenderTime = block.renderTime;
@@ -151,6 +159,7 @@ function loop() {
 
 	timingDiv.innerHTML = `
 		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
+		Light: ${light.renderTime.toFixed(3)} ms<br>
 		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
 		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
 		Meshlets: ${cull.count}<br>

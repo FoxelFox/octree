@@ -6,6 +6,7 @@ struct Mesh {
 	vertexCount: u32,
 	vertices: array<vec4<f16>, 1280>,
 	normals: array<vec3<f16>, 1280>,
+	colors: array<u32, 1280>, // Packed RGBA colors per vertex
 }
 
 struct Command {
@@ -15,8 +16,14 @@ struct Command {
 	firstInstance: u32,
 }
 
+// Voxel data structure containing density and color
+struct VoxelData {
+    density: f32,
+    color: u32, // Packed RGBA color
+}
+
 // Input
-@group(0) @binding(0) var<storage, read> voxel: array<f32>;
+@group(0) @binding(0) var<storage, read> voxels: array<VoxelData>;
 @group(1) @binding(0) var<uniform> context: Context;
 @group(1) @binding(1) var<uniform> offset: vec3<u32>;
 
@@ -342,9 +349,9 @@ const EDGE_VERTICES = array<array<u32, 2>, 12>(
 );
 
 fn calculateGradient(pos: vec3<i32>) -> vec3<f32> {
-	let dx = getVoxelSafe(pos + vec3(1, 0, 0)) - getVoxelSafe(pos - vec3(1, 0, 0));
-	let dy = getVoxelSafe(pos + vec3(0, 1, 0)) - getVoxelSafe(pos - vec3(0, 1, 0));
-	let dz = getVoxelSafe(pos + vec3(0, 0, 1)) - getVoxelSafe(pos - vec3(0, 0, 1));
+	let dx = getVoxelDensitySafe(pos + vec3(1, 0, 0)) - getVoxelDensitySafe(pos - vec3(1, 0, 0));
+	let dy = getVoxelDensitySafe(pos + vec3(0, 1, 0)) - getVoxelDensitySafe(pos - vec3(0, 1, 0));
+	let dz = getVoxelDensitySafe(pos + vec3(0, 0, 1)) - getVoxelDensitySafe(pos - vec3(0, 0, 1));
 
 	let gradient = vec3<f32>(dx, dy, dz);
 	let length = length(gradient);
@@ -354,19 +361,75 @@ fn calculateGradient(pos: vec3<i32>) -> vec3<f32> {
 	return vec3<f32>(0.0, 1.0, 0.0); // Default normal if gradient is zero
 }
 
-fn getVoxel(pos: vec3<u32>) -> f32 {
-	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
-	return voxel[index];
+// Unpack RGBA color from u32
+fn unpackColor(packedColor: u32) -> vec4<f32> {
+    let r = f32(packedColor & 0xFFu) / 255.0;
+    let g = f32((packedColor >> 8u) & 0xFFu) / 255.0;
+    let b = f32((packedColor >> 16u) & 0xFFu) / 255.0;
+    let a = f32((packedColor >> 24u) & 0xFFu) / 255.0;
+    return vec4<f32>(r, g, b, a);
 }
 
-fn getVoxelSafe(pos: vec3<i32>) -> f32 {
+// Pack RGBA color to u32
+fn packColor(color: vec4<f32>) -> u32 {
+    let r = u32(clamp(color.r, 0.0, 1.0) * 255.0) & 0xFFu;
+    let g = u32(clamp(color.g, 0.0, 1.0) * 255.0) & 0xFFu;
+    let b = u32(clamp(color.b, 0.0, 1.0) * 255.0) & 0xFFu;
+    let a = u32(clamp(color.a, 0.0, 1.0) * 255.0) & 0xFFu;
+    return (a << 24u) | (b << 16u) | (g << 8u) | r;
+}
+
+// Interpolate colors for marching cubes edges
+fn interpolateColor(color1: u32, color2: u32, val1: f32, val2: f32) -> u32 {
+    let isolevel = 0.0;
+    if (abs(isolevel - val1) < 0.00001) {
+        return color1;
+    }
+    if (abs(isolevel - val2) < 0.00001) {
+        return color2;
+    }
+    if (abs(val1 - val2) < 0.00001) {
+        return color1;
+    }
+
+    let mu = (isolevel - val1) / (val2 - val1);
+    let c1 = unpackColor(color1);
+    let c2 = unpackColor(color2);
+    let interpolated = c1 + mu * (c2 - c1);
+    return packColor(interpolated);
+}
+
+fn getVoxelData(pos: vec3<u32>) -> VoxelData {
+	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
+	return voxels[index];
+}
+
+fn getVoxelDensity(pos: vec3<u32>) -> f32 {
+	return getVoxelData(pos).density;
+}
+
+fn getVoxelColor(pos: vec3<u32>) -> u32 {
+	return getVoxelData(pos).color;
+}
+
+fn getVoxelDensitySafe(pos: vec3<i32>) -> f32 {
 	if (pos.x < 0 || pos.y < 0 || pos.z < 0 ||
 	    pos.x >= i32(context.grid_size) ||
 	    pos.y >= i32(context.grid_size) ||
 	    pos.z >= i32(context.grid_size)) {
 		return 1.0; // Outside bounds = solid
 	}
-	return getVoxel(vec3<u32>(pos));
+	return getVoxelDensity(vec3<u32>(pos));
+}
+
+fn getVoxelColorSafe(pos: vec3<i32>) -> u32 {
+	if (pos.x < 0 || pos.y < 0 || pos.z < 0 ||
+	    pos.x >= i32(context.grid_size) ||
+	    pos.y >= i32(context.grid_size) ||
+	    pos.z >= i32(context.grid_size)) {
+		return 0x808080FFu; // Default gray color for outside bounds
+	}
+	return getVoxelColor(vec3<u32>(pos));
 }
 
 fn interpolateVertex(p1: vec3<f32>, p2: vec3<f32>, val1: f32, val2: f32) -> vec3<f32> {
@@ -417,16 +480,26 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 				let coord = vec3<u32>(x, y, z);
 				let worldPos = vec3<i32>(coord + actualId * COMPRESSION);
 
-				// Get the 8 corner values of the cube
+				// Get the 8 corner values and colors of the cube
 				var cubeValues: array<f32, 8>;
-				cubeValues[0] = getVoxelSafe(worldPos + vec3(0, 0, 0));
-				cubeValues[1] = getVoxelSafe(worldPos + vec3(1, 0, 0));
-				cubeValues[2] = getVoxelSafe(worldPos + vec3(1, 1, 0));
-				cubeValues[3] = getVoxelSafe(worldPos + vec3(0, 1, 0));
-				cubeValues[4] = getVoxelSafe(worldPos + vec3(0, 0, 1));
-				cubeValues[5] = getVoxelSafe(worldPos + vec3(1, 0, 1));
-				cubeValues[6] = getVoxelSafe(worldPos + vec3(1, 1, 1));
-				cubeValues[7] = getVoxelSafe(worldPos + vec3(0, 1, 1));
+				var cubeColors: array<u32, 8>;
+				cubeValues[0] = getVoxelDensitySafe(worldPos + vec3(0, 0, 0));
+				cubeValues[1] = getVoxelDensitySafe(worldPos + vec3(1, 0, 0));
+				cubeValues[2] = getVoxelDensitySafe(worldPos + vec3(1, 1, 0));
+				cubeValues[3] = getVoxelDensitySafe(worldPos + vec3(0, 1, 0));
+				cubeValues[4] = getVoxelDensitySafe(worldPos + vec3(0, 0, 1));
+				cubeValues[5] = getVoxelDensitySafe(worldPos + vec3(1, 0, 1));
+				cubeValues[6] = getVoxelDensitySafe(worldPos + vec3(1, 1, 1));
+				cubeValues[7] = getVoxelDensitySafe(worldPos + vec3(0, 1, 1));
+				
+				cubeColors[0] = getVoxelColorSafe(worldPos + vec3(0, 0, 0));
+				cubeColors[1] = getVoxelColorSafe(worldPos + vec3(1, 0, 0));
+				cubeColors[2] = getVoxelColorSafe(worldPos + vec3(1, 1, 0));
+				cubeColors[3] = getVoxelColorSafe(worldPos + vec3(0, 1, 0));
+				cubeColors[4] = getVoxelColorSafe(worldPos + vec3(0, 0, 1));
+				cubeColors[5] = getVoxelColorSafe(worldPos + vec3(1, 0, 1));
+				cubeColors[6] = getVoxelColorSafe(worldPos + vec3(1, 1, 1));
+				cubeColors[7] = getVoxelColorSafe(worldPos + vec3(0, 1, 1));
 
 
 				if (cubeValues[0] < 0.0) {
@@ -458,9 +531,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					continue;
 				}
 
-				// Calculate interpolated vertices and normals on edges
+				// Calculate interpolated vertices, normals, and colors on edges
 				var vertexList: array<vec3<f32>, 12>;
 				var normalList: array<vec3<f32>, 12>;
+				var colorList: array<u32, 12>;
 
 				// Check each edge bit and interpolate if necessary
 				for (var i = 0u; i < 12u; i++) {
@@ -476,6 +550,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let n1 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v1]));
 						let n2 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v2]));
 						normalList[i] = interpolateNormal(n1, n2, cubeValues[v1], cubeValues[v2]);
+						
+						// Use hard color edges - pick the color from the "inside" vertex (negative density)
+						if (cubeValues[v1] < cubeValues[v2]) {
+							colorList[i] = cubeColors[v1]; // v1 is more "inside"
+						} else {
+							colorList[i] = cubeColors[v2]; // v2 is more "inside"
+						}
 					}
 				}
 
@@ -495,6 +576,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let n1 = normalList[edge1];
 						let n2 = normalList[edge2];
 						let n3 = normalList[edge3];
+						
+						let c1 = colorList[edge1];
+						let c2 = colorList[edge2];
+						let c3 = colorList[edge3];
 
 						mesh.vertices[mesh.vertexCount] = vec4<f16>(vec3<f16>(v1), 1.0h);
 						mesh.vertices[mesh.vertexCount + 1] = vec4<f16>(vec3<f16>(v2), 1.0h);
@@ -503,6 +588,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						mesh.normals[mesh.vertexCount] = vec3<f16>(n1);
 						mesh.normals[mesh.vertexCount + 1] = vec3<f16>(n2);
 						mesh.normals[mesh.vertexCount + 2] = vec3<f16>(n3);
+						
+						mesh.colors[mesh.vertexCount] = c1;
+						mesh.colors[mesh.vertexCount + 1] = c2;
+						mesh.colors[mesh.vertexCount + 2] = c3;
 
 						mesh.vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {

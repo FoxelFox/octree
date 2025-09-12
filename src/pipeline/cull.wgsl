@@ -6,6 +6,7 @@ struct Mesh {
 	vertexCount: u32,
 	vertices: array<vec4<f16>, 1280>, // worst case is way larger than 2048
 	normals: array<vec3<f16>, 1280>,
+	colors: array<u32, 1280>, // Packed RGBA colors per vertex
 }
 
 // Input
@@ -75,7 +76,7 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 	);
 
 	// Step size of one block (8x8x8 units)
-	let step_size = 4.0;
+	let step_size = 8.0;
 	let density_threshold = 2048u; // Half-filled blocks start occluding
 	let max_steps = 32u; // Reasonable limit for performance
 
