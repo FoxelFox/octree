@@ -1,11 +1,11 @@
-import {GPUContext} from "./gpu";
-import {ContextUniform} from "./data/context";
-import {Noise} from "./pipeline/noise";
-import {FrameGraph} from "./ui/FrameGraph";
-import {Block} from "./pipeline/block";
-import {Mesh} from "./pipeline/mesh";
-import {Cull} from "./pipeline/cull";
-import {VoxelEditor} from "./pipeline/voxel_editor";
+import { GPUContext } from "./gpu";
+import { ContextUniform } from "./data/context";
+import { Noise } from "./pipeline/noise";
+import { FrameGraph } from "./ui/FrameGraph";
+import { Block } from "./pipeline/block";
+import { Mesh } from "./pipeline/mesh";
+import { Cull } from "./pipeline/cull";
+import { VoxelEditor } from "./pipeline/voxel_editor";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -128,7 +128,6 @@ function loop() {
 	// Update culling every frame (async on GPU)
 	cull.update(updateEncoder);
 	block.update(updateEncoder);
-
 
 	device.queue.submit([updateEncoder.finish()]);
 

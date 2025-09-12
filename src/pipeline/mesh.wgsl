@@ -1,9 +1,11 @@
+enable f16;
+
 #import "../data/context.wgsl"
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f32>, 1280>,
-	normals: array<vec3<f32>, 1280>,
+	vertices: array<vec4<f16>, 1280>,
+	normals: array<vec3<f16>, 1280>,
 }
 
 struct Command {
@@ -494,13 +496,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let n2 = normalList[edge2];
 						let n3 = normalList[edge3];
 
-						mesh.vertices[mesh.vertexCount] = vec4<f32>(v1, 1.0);
-						mesh.vertices[mesh.vertexCount + 1] = vec4<f32>(v2, 1.0);
-						mesh.vertices[mesh.vertexCount + 2] = vec4<f32>(v3, 1.0);
+						mesh.vertices[mesh.vertexCount] = vec4<f16>(vec3<f16>(v1), 1.0h);
+						mesh.vertices[mesh.vertexCount + 1] = vec4<f16>(vec3<f16>(v2), 1.0h);
+						mesh.vertices[mesh.vertexCount + 2] = vec4<f16>(vec3<f16>(v3), 1.0h);
 
-						mesh.normals[mesh.vertexCount] = n1;
-						mesh.normals[mesh.vertexCount + 1] = n2;
-						mesh.normals[mesh.vertexCount + 2] = n3;
+						mesh.normals[mesh.vertexCount] = vec3<f16>(n1);
+						mesh.normals[mesh.vertexCount + 1] = vec3<f16>(n2);
+						mesh.normals[mesh.vertexCount + 2] = vec3<f16>(n3);
 
 						mesh.vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
