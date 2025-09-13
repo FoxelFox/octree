@@ -47,7 +47,8 @@ fn smax(a: f32, b: f32, k: f32) -> f32 {
 }
 
 // Neon pink gummy color as packed u32 (ABGR format: A|B|G|R)
-const NEON_PINK_COLOR: u32 = 0xFF3185FF; // RGB(255,0,153) in ABGR format
+//const NEON_PINK_COLOR: u32 = 0xFF3185FF; // RGB(255,0,153) in ABGR format
+const NEON_PINK_COLOR: u32 = 0xFFDDDDDD; // RGB(255,0,153) in ABGR format
 
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {

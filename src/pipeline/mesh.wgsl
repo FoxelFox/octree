@@ -4,9 +4,9 @@ enable f16;
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f16>, 1280>,
-	normals: array<vec3<f16>, 1280>,
-	colors: array<u32, 1280>, // Packed RGBA colors per vertex
+	vertices: array<vec4<f16>, 1536>,
+	normals: array<vec3<f16>, 1536>,
+	colors: array<u32, 1536>, // Packed RGBA colors per vertex
 }
 
 struct Command {
@@ -491,7 +491,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 				cubeValues[5] = getVoxelDensitySafe(worldPos + vec3(1, 0, 1));
 				cubeValues[6] = getVoxelDensitySafe(worldPos + vec3(1, 1, 1));
 				cubeValues[7] = getVoxelDensitySafe(worldPos + vec3(0, 1, 1));
-				
+
 				cubeColors[0] = getVoxelColorSafe(worldPos + vec3(0, 0, 0));
 				cubeColors[1] = getVoxelColorSafe(worldPos + vec3(1, 0, 0));
 				cubeColors[2] = getVoxelColorSafe(worldPos + vec3(1, 1, 0));
@@ -550,7 +550,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let n1 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v1]));
 						let n2 = calculateGradient(worldPos + vec3<i32>(CUBE_VERTICES[v2]));
 						normalList[i] = interpolateNormal(n1, n2, cubeValues[v1], cubeValues[v2]);
-						
+
 						// Use hard color edges - pick the color from the "inside" vertex (negative density)
 						if (cubeValues[v1] < cubeValues[v2]) {
 							colorList[i] = cubeColors[v1]; // v1 is more "inside"
@@ -568,7 +568,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					let edge3 = triangleConfig[i + 2];
 
 					// Ensure we don't exceed vertex buffer capacity
-					if (mesh.vertexCount + 3 <= 1280 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
+					if (mesh.vertexCount + 3 <= 1536 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
 						let v1 = vertexList[edge1];
 						let v2 = vertexList[edge2];
 						let v3 = vertexList[edge3];
@@ -576,7 +576,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let n1 = normalList[edge1];
 						let n2 = normalList[edge2];
 						let n3 = normalList[edge3];
-						
+
 						let c1 = colorList[edge1];
 						let c2 = colorList[edge2];
 						let c3 = colorList[edge3];
@@ -588,7 +588,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						mesh.normals[mesh.vertexCount] = vec3<f16>(n1);
 						mesh.normals[mesh.vertexCount + 1] = vec3<f16>(n2);
 						mesh.normals[mesh.vertexCount + 2] = vec3<f16>(n3);
-						
+
 						mesh.colors[mesh.vertexCount] = c1;
 						mesh.colors[mesh.vertexCount + 1] = c2;
 						mesh.colors[mesh.vertexCount + 2] = c3;

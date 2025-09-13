@@ -1,8 +1,8 @@
 #import "../data/context.wgsl"
 
 // Constants
-const FOG_START = 256.0;
-const FOG_END = 1024.0;
+const FOG_START = 128.0;
+const FOG_END = 512.0;
 
 @group(0) @binding(0) var<uniform> context: Context;
 @group(1) @binding(0) var positionTexture: texture_2d<f32>;

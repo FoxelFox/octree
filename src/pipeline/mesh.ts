@@ -21,9 +21,9 @@ export class Mesh {
 		const maxMeshSize =
 			4 + // vertexCount (u32 = 4 bytes)
 			12 + // padding to align vertices array to 16-byte boundary
-			1280 * 8 + // vertices (vec4<f16> = 8 bytes each)
-			1280 * 8 + // normals (vec3<f16> = 8 bytes each in array, padded)
-			1280 * 4; // colors (u32 = 4 bytes each)
+			1536 * 8 + // vertices (vec4<f16> = 8 bytes each)
+			1536 * 8 + // normals (vec3<f16> = 8 bytes each in array, padded)
+			1536 * 4; // colors (u32 = 4 bytes each)
 
 		this.meshes = device.createBuffer({
 			size: maxMeshSize * maxMeshCount,
@@ -100,23 +100,31 @@ export class Mesh {
 		});
 	}
 
-	update(encoder: GPUCommandEncoder, bounds?: {min: [number, number, number], max: [number, number, number]}) {
+	update(
+		encoder: GPUCommandEncoder,
+		bounds?: { min: [number, number, number]; max: [number, number, number] },
+	) {
 		if (bounds) {
 			// Calculate mesh chunk bounds in compressed grid space
 			const sSize = gridSize / compression;
 			const minChunk = [
 				Math.max(0, Math.floor(bounds.min[0] / compression)),
-				Math.max(0, Math.floor(bounds.min[1] / compression)), 
-				Math.max(0, Math.floor(bounds.min[2] / compression))
+				Math.max(0, Math.floor(bounds.min[1] / compression)),
+				Math.max(0, Math.floor(bounds.min[2] / compression)),
 			];
 			const maxChunk = [
 				Math.min(sSize - 1, Math.ceil(bounds.max[0] / compression)),
 				Math.min(sSize - 1, Math.ceil(bounds.max[1] / compression)),
-				Math.min(sSize - 1, Math.ceil(bounds.max[2] / compression))
+				Math.min(sSize - 1, Math.ceil(bounds.max[2] / compression)),
 			];
 
 			// Write offset to shader uniform
-			const offsetData = new Uint32Array([minChunk[0], minChunk[1], minChunk[2], 0]); // padding for vec3<u32>
+			const offsetData = new Uint32Array([
+				minChunk[0],
+				minChunk[1],
+				minChunk[2],
+				0,
+			]); // padding for vec3<u32>
 			device.queue.writeBuffer(this.offsetBuffer, 0, offsetData);
 
 			const pass = encoder.beginComputePass({
@@ -130,7 +138,7 @@ export class Mesh {
 			const workgroupsX = Math.ceil((maxChunk[0] - minChunk[0] + 1) / 4);
 			const workgroupsY = Math.ceil((maxChunk[1] - minChunk[1] + 1) / 4);
 			const workgroupsZ = Math.ceil((maxChunk[2] - minChunk[2] + 1) / 4);
-			
+
 			pass.dispatchWorkgroups(workgroupsX, workgroupsY, workgroupsZ);
 			pass.end();
 		} else {

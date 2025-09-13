@@ -16,15 +16,61 @@ struct VoxelData {
 
 // Generate continuous SDF values instead of binary 0/1
 fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
-    // Generate deterministic noise that doesn't depend on time for TAA stability
-    let noise_value = rock_voronoi3(vec3<f32>(pos+10) / 500.0, 4,10);
+    let pos_f = vec3<f32>(pos);
 
-    // Convert noise from [0,1] range to SDF values
-    // Values > 0.5 become negative (inside), values < 0.5 become positive (outside)
-    let threshold = 0.5;
-    let sdf_range = 2.0; // Maximum distance value
+    // Generate rocky surface base using fractal noise
+    let surface_noise = rock_voronoi3(pos_f / 80.0, 2, 10);
+    let surface_detail = rock_voronoi3(pos_f / 100.0, 8, 10) * 0.3;
+    let rocky_surface = surface_noise + surface_detail;
 
-    return (threshold - noise_value) * sdf_range;
+    // Create a base rocky terrain with height variation
+    let terrain_height = 64.0; // Base terrain level
+    let height_variation = 32.0; // How much the terrain varies
+    let base_terrain = pos_f.y - (terrain_height + rocky_surface * height_variation);
+
+    // Generate cave systems using 3D Voronoi noise
+    let cave_scale = 200.0; // Size of cave chambers
+    let cave_noise1 = rock_voronoi3(pos_f / cave_scale, 3, 5);
+    let cave_noise2 = rock_voronoi3((pos_f + vec3<f32>(1000.0)) / (cave_scale * 0.7), 2, 4);
+    let cave_noise3 = rock_voronoi3((pos_f + vec3<f32>(2000.0)) / (cave_scale * 1.3), 4, 3);
+    
+    // Create cave chambers - combine multiple noise layers for complex cave shapes
+    let cave_chambers = max(max(cave_noise1 - 0.4, cave_noise2 - 0.45), cave_noise3 - 0.5);
+    
+    // Create cave tunnels using different noise
+    let tunnel_noise1 = rock_voronoi3(pos_f / 150.0 + vec3<f32>(500.0), 2, 6);
+    let tunnel_noise2 = rock_voronoi3(pos_f / 180.0 + vec3<f32>(1500.0), 3, 4);
+    let cave_tunnels = max(tunnel_noise1 - 0.6, tunnel_noise2 - 0.65);
+    
+    // Combine chambers and tunnels
+    let cave_system = max(cave_chambers, cave_tunnels);
+    
+    // Create cave SDF - positive values are inside caves (air)
+    let cave_sdf = cave_system * 20.0; // Scale up the cave effect
+
+    // Generate stones that sit on top of the rocky surface
+    let stone_noise = rock_voronoi3((pos_f + vec3<f32>(100.0)) / 300.0, 6, 8);
+    let stone_size = 8.0; // Size of individual stones
+    let stone_threshold = 0.6; // How sparse the stones are
+
+    // Only place stones above the base terrain
+    var stone_sdf = 1000.0; // Far away by default
+    if (base_terrain < 0.0 && stone_noise > stone_threshold) {
+        // Distance from stone center
+        let stone_center_noise = rock_voronoi3(pos_f / 150.0, 4, 3);
+        stone_sdf = length(fract(pos_f / stone_size) - 0.5) * stone_size - (stone_size * 0.3);
+        // Add some variation to stone shape
+        stone_sdf += stone_center_noise * 2.0;
+    }
+
+    // Combine terrain and stones using min operation (union in SDF)
+    var final_sdf = min(base_terrain, stone_sdf);
+    
+    // Subtract caves from the terrain (max operation with negative cave SDF)
+    final_sdf = max(final_sdf, cave_sdf);
+
+    // Clamp final SDF to 0-1 range for voxel buffer
+    return clamp(final_sdf, -1.0, 1.0);
 }
 
 // Generate candy-colored voxels
@@ -147,7 +193,7 @@ fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let density = generate_sdf_noise(id);
     //let color = generate_color(id, density);
-    let color = 0xFFFFFFFFu;
+    let color = 0xDDDDDDu;
 
     voxels[to1D(id)] = VoxelData(density, color);
 }

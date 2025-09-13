@@ -11,9 +11,9 @@ struct VertexOutput {
 
 struct Mesh {
 	vertexCount: u32,
-	vertices: array<vec4<f16>, 1280>, // worst case is way larger than 2048
-	normals: array<vec3<f16>, 1280>,
-	colors: array<u32, 1280>, // Packed RGBA colors per vertex
+	vertices: array<vec4<f16>, 1536>, // worst case is way larger than 2048
+	normals: array<vec3<f16>, 1536>,
+	colors: array<u32, 1536>, // Packed RGBA colors per vertex
 }
 
 @group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
