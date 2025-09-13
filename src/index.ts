@@ -95,7 +95,7 @@ async function runOneTimeSetup() {
 	const encoder = device.createCommandEncoder();
 
 	mesh.update(encoder);
-	light.update(encoder);
+	light.update(encoder, mesh);
 	device.queue.submit([encoder.finish()]);
 
 	mesh.afterUpdate();
@@ -132,7 +132,7 @@ function loop() {
 	const updateEncoder = device.createCommandEncoder();
 
 	// Update lighting and culling every frame (async on GPU)
-	light.update(updateEncoder);
+	light.update(updateEncoder, mesh);
 	cull.update(updateEncoder);
 	block.update(updateEncoder);
 

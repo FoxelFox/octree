@@ -4,8 +4,10 @@ import shader from "./light.wgsl" with { type: "text" };
 import { RenderTimer } from "./timing";
 
 export class Light {
-	// Light data buffer for compressed grid
-	lightBuffer: GPUBuffer;
+	// Double buffered light data buffers
+	private lightBufferA: GPUBuffer;
+	private lightBufferB: GPUBuffer;
+	private currentBufferIndex = 0; // 0 = A, 1 = B
 	
 	// Compute pipeline for light propagation
 	pipeline: GPUComputePipeline;
@@ -32,12 +34,14 @@ export class Light {
 		const sSize = gridSize / compression;
 		const totalCells = sSize * sSize * sSize;
 		
-		// Light buffer: stores light intensity (R) and shadow factor (G) for each compressed cell
-		// Format: RG16Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
-		this.lightBuffer = device.createBuffer({
+		// Create both light buffers: stores light intensity (R) and shadow factor (G) for each compressed cell
+		// Format: RG32Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
+		const bufferConfig = {
 			size: totalCells * 8, // 2 * 4 bytes per cell (RG32Float)
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		});
+		};
+		this.lightBufferA = device.createBuffer(bufferConfig);
+		this.lightBufferB = device.createBuffer(bufferConfig);
 
 		// Configuration buffer for simulation parameters
 		this.configBuffer = device.createBuffer({
@@ -47,6 +51,43 @@ export class Light {
 
 		// Initialize with default values
 		this.updateConfig();
+	}
+
+	// Get the current buffer (for rendering/display)
+	private getCurrentBuffer(): GPUBuffer {
+		return this.currentBufferIndex === 0 ? this.lightBufferA : this.lightBufferB;
+	}
+
+	// Get the next buffer (for computing updates)
+	private getNextBuffer(): GPUBuffer {
+		return this.currentBufferIndex === 0 ? this.lightBufferB : this.lightBufferA;
+	}
+
+	// Swap buffers after update is complete
+	private swapBuffers() {
+		this.currentBufferIndex = 1 - this.currentBufferIndex;
+	}
+
+	// Create bind groups using the next buffer for computation
+	private createBindGroups(mesh: Mesh) {
+		this.bindGroup = device.createBindGroup({
+			label: "Light Data",
+			layout: this.pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: { buffer: mesh.density }, // Input: mesh density
+				},
+				{
+					binding: 1,
+					resource: { buffer: this.getNextBuffer() }, // Output: light data (next buffer)
+				},
+				{
+					binding: 2,
+					resource: { buffer: this.configBuffer }, // Config
+				},
+			],
+		});
 	}
 
 	init(mesh: Mesh) {
@@ -62,25 +103,8 @@ export class Light {
 			},
 		});
 
-		// Create bind groups
-		this.bindGroup = device.createBindGroup({
-			label: "Light Data",
-			layout: this.pipeline.getBindGroupLayout(0),
-			entries: [
-				{
-					binding: 0,
-					resource: { buffer: mesh.density }, // Input: mesh density
-				},
-				{
-					binding: 1,
-					resource: { buffer: this.lightBuffer }, // Output: light data
-				},
-				{
-					binding: 2,
-					resource: { buffer: this.configBuffer }, // Config
-				},
-			],
-		});
+		// Create bind groups - we'll recreate these when we swap buffers
+		this.createBindGroups(mesh);
 
 		this.contextBindGroup = device.createBindGroup({
 			label: "Light Context",
@@ -129,13 +153,22 @@ export class Light {
 			}
 		}
 
-		device.queue.writeBuffer(this.lightBuffer, 0, initData);
+		// Initialize both buffers with the same data
+		device.queue.writeBuffer(this.lightBufferA, 0, initData);
+		device.queue.writeBuffer(this.lightBufferB, 0, initData);
 	}
 
-	update(encoder: GPUCommandEncoder) {
+	update(encoder: GPUCommandEncoder, mesh: Mesh) {
 		if (!this.needsUpdate) return;
 
-		// Run multiple iterations of light propagation
+		// First, copy current buffer to next buffer to preserve existing lighting
+		encoder.copyBufferToBuffer(
+			this.getCurrentBuffer(), 0,
+			this.getNextBuffer(), 0,
+			this.getCurrentBuffer().size
+		);
+
+		// Run multiple iterations of light propagation on the next buffer
 		for (let i = 0; i < this.maxIterations; i++) {
 			const pass = encoder.beginComputePass({
 				label: `Light Propagation Iteration ${i}`,
@@ -162,6 +195,12 @@ export class Light {
 			this.timer.resolveTimestamps(encoder);
 		}
 
+		// Swap buffers so the updated one becomes current
+		this.swapBuffers();
+		
+		// Recreate bind groups for the new configuration
+		this.createBindGroups(mesh);
+
 		this.iterationCount++;
 		// Stop updating after the light has stabilized
 		if (this.iterationCount >= this.maxIterations * 2) {
@@ -173,12 +212,13 @@ export class Light {
 	invalidate() {
 		this.needsUpdate = true;
 		this.iterationCount = 0;
-		this.initializeLighting(); // Reset to skylight
+		// No need to reset lighting - the double buffering will naturally
+		// recalculate lighting from the current state without flicker
 	}
 
 	// Get the light buffer for use in other shaders
 	getLightBuffer(): GPUBuffer {
-		return this.lightBuffer;
+		return this.getCurrentBuffer();
 	}
 
 	afterUpdate() {
