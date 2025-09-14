@@ -1,7 +1,7 @@
-import { compression, contextUniform, device, gridSize } from "../index";
-import { Mesh } from "./mesh";
+import { compression, contextUniform, device, gridSize } from "../../index";
+import { Mesh } from "../generation/mesh";
 import shader from "./light.wgsl" with { type: "text" };
-import { RenderTimer } from "./timing";
+import { RenderTimer } from "../timing";
 
 export class Light {
 	// Double buffered light data buffers

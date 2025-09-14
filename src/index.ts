@@ -1,12 +1,14 @@
 import { GPUContext } from "./gpu";
 import { ContextUniform } from "./data/context";
-import { Noise } from "./pipeline/noise";
-import { FrameGraph } from "./ui/FrameGraph";
-import { Block } from "./pipeline/block";
-import { Mesh } from "./pipeline/mesh";
-import { Cull } from "./pipeline/cull";
-import { Light } from "./pipeline/light";
-import { VoxelEditor } from "./pipeline/voxel_editor";
+import { Noise } from "./pipeline/generation/noise";
+import { Block } from "./pipeline/rendering/block";
+import { Mesh } from "./pipeline/generation/mesh";
+import { Cull } from "./pipeline/rendering/cull";
+import { Light } from "./pipeline/rendering/light";
+import { VoxelEditor } from "./pipeline/generation/voxel_editor";
+import { TimingDisplay } from "./ui/timing-display";
+import { FrameGraphManager } from "./ui/frame-graph-manager";
+import { VoxelEditorHandler } from "./ui/voxel-editor";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -40,38 +42,13 @@ block.mesh = mesh;
 block.cull = cull;
 block.light = light;
 
+// --- UI Components ---
+const timingDisplay = new TimingDisplay();
+const frameGraphManager = new FrameGraphManager();
+let voxelEditorHandler: VoxelEditorHandler;
+
 // --- Voxel Editor ---
 let voxelEditor: VoxelEditor;
-
-// --- Timing Display ---
-const timingDiv = document.createElement("div");
-document.body.appendChild(timingDiv);
-timingDiv.style.cssText = `
-	position: fixed;
-	top: 10px;
-	left: 10px;
-	background: rgba(0, 0, 0, 0.8);
-	color: white;
-	padding: 10px;
-	font-family: monospace;
-	font-size: 12px;
-	border-radius: 4px;
-	pointer-events: none;
-	z-index: 1000;
-`;
-
-// --- Frame Graph ---
-const frameGraph = new FrameGraph();
-const frameGraphContainer = document.createElement("div");
-frameGraphContainer.style.cssText = `
-	position: fixed;
-	top: 10px;
-	right: 10px;
-	z-index: 1000;
-	pointer-events: auto;
-`;
-frameGraphContainer.appendChild(frameGraph.getElement());
-document.body.appendChild(frameGraphContainer);
 
 async function runOneTimeSetup() {
 	gpu.update();
@@ -103,6 +80,7 @@ async function runOneTimeSetup() {
 
 	// Initialize voxel editor after all systems are ready
 	voxelEditor = new VoxelEditor(block, noise, mesh, cull, light);
+	voxelEditorHandler = new VoxelEditorHandler(gpu, voxelEditor);
 
 	console.log("Setup complete.");
 }
@@ -122,7 +100,7 @@ function loop() {
 
 	// Handle voxel editing when pointer is locked and in Block mode
 	if (voxelEditor && gpu.mouse.locked) {
-		handleVoxelEditing();
+		voxelEditorHandler.handleVoxelEditing();
 	}
 
 	for (const uniform of uniforms) {
@@ -147,83 +125,17 @@ function loop() {
 	const currentRenderTime = block.renderTime;
 
 	// Update frame graph with GPU render time from active renderer
-	frameGraph.addFrameTime(currentRenderTime);
-	frameGraph.render();
+	frameGraphManager.getFrameGraph().addFrameTime(currentRenderTime);
+	frameGraphManager.render();
 
 	// Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
 	const frameEnd = performance.now();
 	const cpuFrameTime = frameEnd - frameStart;
 
 	// Update timing display
-	const stats = frameGraph.getCurrentStats();
+	const stats = frameGraphManager.getFrameGraph().getCurrentStats();
 
-	timingDiv.innerHTML = `
-		GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
-		Light: ${light.renderTime.toFixed(3)} ms<br>
-		CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
-		FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
-		Meshlets: ${cull.count}<br>
-	`;
+	timingDisplay.update(currentRenderTime, light.renderTime, cpuFrameTime, stats, cull.count);
 
 	requestAnimationFrame(loop);
-}
-
-// Voxel editing logic
-let isEditingVoxel = false;
-let lastLeftPressed = false;
-let lastRightPressed = false;
-
-function handleVoxelEditing() {
-	// Prevent multiple simultaneous editing operations
-	if (isEditingVoxel) return;
-
-	const leftPressed = gpu.mouse.leftPressed;
-	const rightPressed = gpu.mouse.rightPressed;
-
-	// Only process on button press (transition from not pressed to pressed)
-	const leftJustPressed = leftPressed && !lastLeftPressed;
-	const rightJustPressed = rightPressed && !lastRightPressed;
-
-	// Update last pressed state
-	lastLeftPressed = leftPressed;
-	lastRightPressed = rightPressed;
-
-	// Only process if a button was just pressed
-	if (!leftJustPressed && !rightJustPressed) return;
-
-	isEditingVoxel = true;
-
-	// Read position at screen center (async but non-blocking)
-	voxelEditor
-		.readPositionAtCenter()
-		.then((worldPosition) => {
-			if (worldPosition && voxelEditor.hasGeometryAtCenter()) {
-				const editRadius = 10.0; // Configurable brush size
-
-				if (leftJustPressed) {
-					// Left click: Add voxels (now non-blocking)
-					voxelEditor.addVoxels(worldPosition, editRadius);
-					console.log(
-						"Queued add voxels at:",
-						worldPosition[0],
-						worldPosition[1],
-						worldPosition[2],
-					);
-				} else if (rightJustPressed) {
-					// Right click: Remove voxels (now non-blocking)
-					voxelEditor.removeVoxels(worldPosition, editRadius);
-					console.log(
-						"Queued remove voxels at:",
-						worldPosition[0],
-						worldPosition[1],
-						worldPosition[2],
-					);
-				}
-			}
-			isEditingVoxel = false;
-		})
-		.catch((error) => {
-			console.error("Error during voxel editing:", error);
-			isEditingVoxel = false;
-		});
 }

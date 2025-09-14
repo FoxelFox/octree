@@ -1,8 +1,8 @@
-import { compression, contextUniform, device, gridSize } from "..";
-import { Mesh } from "./mesh";
-import { Noise } from "./noise";
+import { compression, contextUniform, device, gridSize } from "../../index";
+import { Mesh } from "../generation/mesh";
+import { Noise } from "../generation/noise";
 import shader from "./cull.wgsl" with { type: "text" };
-import { RenderTimer } from "./timing";
+import { RenderTimer } from "../timing";
 
 export class Cull {
 	counter: GPUBuffer;

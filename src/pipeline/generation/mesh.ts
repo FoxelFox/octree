@@ -1,7 +1,7 @@
-import { compression, contextUniform, device, gridSize } from "../index";
+import { compression, contextUniform, device, gridSize } from "../../index";
 import shader from "./mesh.wgsl";
 import { Noise } from "./noise";
-import { RenderTimer } from "./timing";
+import { RenderTimer } from "../timing";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;

@@ -1,6 +1,6 @@
 #import "perlin.wgsl"
 #import "voronoi.wgsl"
-#import "../data/context.wgsl"
+#import "../../data/context.wgsl"
 
 // input
 @group(1) @binding(0) var<uniform> context: Context;

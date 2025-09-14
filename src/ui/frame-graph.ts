@@ -57,7 +57,7 @@ export class FrameGraph {
 			this.render();
 		}, 100);
 	}
-	private resizeTimeout: number = 0;
+	private resizeTimeout: Timer;
 
 	private handleMouseMove(event: MouseEvent): void {
 		const rect = this.canvas.getBoundingClientRect();

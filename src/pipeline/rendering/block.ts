@@ -1,11 +1,11 @@
-import {canvas, context, contextUniform, device, gridSize, compression} from "../index";
+import {canvas, context, contextUniform, device, gridSize, compression} from "../../index";
 import shader from "./block.wgsl" with {type: "text"};
 import deferredShader from "./block_deferred.wgsl" with {type: "text"};
-import spaceBackgroundShader from "./space_background.wgsl" with {type: "text"};
+import spaceBackgroundShader from "../generation/space_background.wgsl" with {type: "text"};
 import {Cull} from "./cull";
-import {Mesh} from "./mesh";
+import {Mesh} from "../generation/mesh";
 import {Light} from "./light";
-import {RenderTimer} from "./timing";
+import {RenderTimer} from "../timing";
 
 export class Block {
 	// input

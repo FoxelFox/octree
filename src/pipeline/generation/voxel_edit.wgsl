@@ -1,4 +1,4 @@
-#import "../data/context.wgsl"
+#import "../../data/context.wgsl"
 
 struct EditParams {
     position: vec3<f32>,

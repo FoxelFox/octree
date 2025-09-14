@@ -1,4 +1,4 @@
-#import "../data/context.wgsl"
+#import "../../data/context.wgsl"
 
 struct LightConfig {
     max_iterations: f32,

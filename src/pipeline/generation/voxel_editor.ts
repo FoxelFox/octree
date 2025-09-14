@@ -1,11 +1,11 @@
-import {canvas, contextUniform, device, gridSize} from "../index";
-import {Block} from "./block";
+import {canvas, contextUniform, device, gridSize} from "../../index";
+import {Block} from "../rendering/block";
 import {Noise} from "./noise";
 import {Mesh} from "./mesh";
-import {Cull} from "./cull";
-import {Light} from "./light";
+import {Cull} from "../rendering/cull";
+import {Light} from "../rendering/light";
 import editShader from "./voxel_edit.wgsl" with {type: "text"};
-import {RenderTimer} from "./timing";
+import {RenderTimer} from "../timing";
 
 interface VoxelEditCommand {
 	worldPosition: Float32Array;

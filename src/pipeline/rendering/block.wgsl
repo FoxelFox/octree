@@ -1,6 +1,6 @@
 enable f16;
 
-#import "../data/context.wgsl"
+#import "../../data/context.wgsl"
 
 struct VertexOutput {
   @builtin(position) position : vec4f,

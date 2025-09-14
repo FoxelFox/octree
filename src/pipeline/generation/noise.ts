@@ -1,4 +1,4 @@
-import {contextUniform, device, gridSize} from "..";
+import {contextUniform, device, gridSize} from "../../index";
 import shader from "./noise.wgsl" with {type: "text"};
 
 export class Noise {

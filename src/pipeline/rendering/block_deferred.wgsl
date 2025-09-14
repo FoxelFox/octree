@@ -1,4 +1,4 @@
-#import "../data/context.wgsl"
+#import "../../data/context.wgsl"
 
 // Constants
 const FOG_START = 128.0;
