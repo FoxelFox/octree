@@ -9,6 +9,7 @@ import { VoxelEditor } from "./pipeline/generation/voxel_editor";
 import { TimingDisplay } from "./ui/timing-display";
 import { FrameGraphManager } from "./ui/frame-graph-manager";
 import { VoxelEditorHandler } from "./ui/voxel-editor";
+import {Streaming} from "./chunk/streaming";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -32,23 +33,13 @@ console.log("gridSize:", gridSize);
 
 const uniforms = [contextUniform];
 
-// --- Setup Pipelines ---
-const noise = new Noise();
-const light = new Light();
-const block = new Block();
-const mesh = new Mesh();
-const cull = new Cull();
-block.mesh = mesh;
-block.cull = cull;
-block.light = light;
+const streaming = new Streaming();
+
 
 // --- UI Components ---
 const timingDisplay = new TimingDisplay();
 const frameGraphManager = new FrameGraphManager();
-let voxelEditorHandler: VoxelEditorHandler;
 
-// --- Voxel Editor ---
-let voxelEditor: VoxelEditor;
 
 async function runOneTimeSetup() {
 	gpu.update();
@@ -57,32 +48,8 @@ async function runOneTimeSetup() {
 		uniform.update();
 	}
 
-	console.log("Running one-time octree generation and compaction...");
-	const setupEncoder = device.createCommandEncoder();
-	noise.update(setupEncoder);
+	streaming.init();
 
-	device.queue.submit([setupEncoder.finish()]);
-
-	mesh.init(noise);
-	cull.init(noise, mesh);
-	light.init(mesh);
-
-	// Generate distance field from voxel data
-	console.log("Generating distance field...");
-	const encoder = device.createCommandEncoder();
-
-	mesh.update(encoder);
-	light.update(encoder, mesh);
-	device.queue.submit([encoder.finish()]);
-
-	mesh.afterUpdate();
-	light.afterUpdate();
-
-	// Initialize voxel editor after all systems are ready
-	voxelEditor = new VoxelEditor(block, noise, mesh, cull, light);
-	voxelEditorHandler = new VoxelEditorHandler(gpu, voxelEditor);
-
-	console.log("Setup complete.");
 }
 
 await runOneTimeSetup();
@@ -99,8 +66,8 @@ function loop() {
 	gpu.update();
 
 	// Handle voxel editing when pointer is locked and in Block mode
-	if (voxelEditor && gpu.mouse.locked) {
-		voxelEditorHandler.handleVoxelEditing();
+	if (streaming.voxelEditor && gpu.mouse.locked) {
+		streaming.voxelEditorHandler.handleVoxelEditing();
 	}
 
 	for (const uniform of uniforms) {
@@ -109,20 +76,10 @@ function loop() {
 
 	const updateEncoder = device.createCommandEncoder();
 
-	// Update lighting and culling every frame (async on GPU)
-	light.update(updateEncoder, mesh);
-	cull.update(updateEncoder);
-	block.update(updateEncoder);
-
-	device.queue.submit([updateEncoder.finish()]);
-
-	block.afterUpdate();
-	mesh.afterUpdate();
-	cull.afterUpdate();
-	light.afterUpdate();
+	streaming.update(updateEncoder);
 
 	// Get current renderer's timing based on pipeline mode
-	const currentRenderTime = block.renderTime;
+	const currentRenderTime = streaming.block.renderTime;
 
 	// Update frame graph with GPU render time from active renderer
 	frameGraphManager.getFrameGraph().addFrameTime(currentRenderTime);
@@ -135,7 +92,7 @@ function loop() {
 	// Update timing display
 	const stats = frameGraphManager.getFrameGraph().getCurrentStats();
 
-	timingDisplay.update(currentRenderTime, light.renderTime, cpuFrameTime, stats, cull.count);
+	timingDisplay.update(currentRenderTime, streaming.light.renderTime, cpuFrameTime, stats, streaming.cull.count);
 
 	requestAnimationFrame(loop);
 }
