@@ -1,5 +1,6 @@
 export class Chunk {
-	id: number[]
+	id: number
+	position: number[]
 	meshes: GPUBuffer;
 	commands: GPUBuffer;
 	density: GPUBuffer;
@@ -7,4 +8,10 @@ export class Chunk {
 	count: number = 0;
 	indices: Uint32Array;
 	light: GPUBuffer;
+
+	constructor(id: number, position: number[]) {
+		this.id = id;
+		this.position = position;
+	}
+
 }
