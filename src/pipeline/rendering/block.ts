@@ -309,7 +309,11 @@ export class Block {
 		this.gBufferBindGroup = device.createBindGroup({
 			label: "Block G-Buffer Meshes",
 			layout: this.gBufferPipeline.getBindGroupLayout(0),
-			entries: [{binding: 0, resource: this.mesh.meshes}],
+			entries: [
+				{binding: 1, resource: {buffer: this.mesh.vertices}},
+				{binding: 2, resource: {buffer: this.mesh.normals}},
+				{binding: 3, resource: {buffer: this.mesh.colors}},
+			],
 		});
 
 		this.gBufferUniformBindGroup = device.createBindGroup({

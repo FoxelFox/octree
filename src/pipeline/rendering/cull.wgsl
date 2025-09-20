@@ -2,15 +2,9 @@ enable f16;
 
 #import "../../data/context.wgsl"
 
-struct Mesh {
-	vertexCount: u32,
-	vertices: array<vec4<f16>, 1536>, // worst case is way larger than 2048
-	normals: array<vec3<f16>, 1536>,
-	colors: array<u32, 1536>, // Packed RGBA colors per vertex
-}
 
 // Input
-@group(0) @binding(1) var<storage, read> meshes: array<Mesh>;
+@group(0) @binding(1) var<storage, read> vertexCounts: array<u32>;
 @group(0) @binding(3) var<storage, read> density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
 
@@ -137,9 +131,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 	let view_proj = context.perspective * context.view;
 
 
-	let mesh = meshes[index];
+	let vertexCount = vertexCounts[index];
 
-	if (mesh.vertexCount > 0) {
+	if (vertexCount > 0) {
 
 		// Frustum culling: use fixed 8x8x8 block size
 		let block_pos = vec3<u32>(id);

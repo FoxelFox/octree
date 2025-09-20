@@ -9,14 +9,9 @@ struct VertexOutput {
   @location(2) normal: vec3<f32>,
 }
 
-struct Mesh {
-	vertexCount: u32,
-	vertices: array<vec4<f16>, 1536>, // worst case is way larger than 2048
-	normals: array<vec3<f16>, 1536>,
-	colors: array<u32, 1536>, // Packed RGBA colors per vertex
-}
-
-@group(0) @binding(0) var<storage, read> meshes: array<Mesh>;
+@group(0) @binding(1) var<storage, read> vertices: array<vec4<f16>>;
+@group(0) @binding(2) var<storage, read> normals: array<vec3<f16>>;
+@group(0) @binding(3) var<storage, read> colors: array<u32>;
 @group(1) @binding(0) var <uniform> context: Context;
 
 
@@ -37,19 +32,22 @@ fn vs_main(
 ) -> VertexOutput {
 	var out: VertexOutput;
 
+	// Calculate global vertex index
+	let globalVertexIndex = instanceIndex * 1536u + vertexIndex;
+
 	// Use per-vertex color from mesh data
-	let packedColor = meshes[instanceIndex].colors[vertexIndex];
+	let packedColor = colors[globalVertexIndex];
 	let vertexColor = unpackColor(packedColor);
 	out.color = vertexColor.rgb;
 
 	// Get world position (convert from f16 to f32)
-	let world_pos = vec3<f32>(meshes[instanceIndex].vertices[vertexIndex].xyz);
+	let world_pos = vec3<f32>(vertices[globalVertexIndex].xyz);
 	out.world_pos = world_pos;
 
 	// Use stored normal (convert from f16 to f32)
-	out.normal = vec3<f32>(meshes[instanceIndex].normals[vertexIndex]);
+	out.normal = vec3<f32>(normals[globalVertexIndex]);
 
-	out.position = context.perspective * context.view * vec4<f32>(meshes[instanceIndex].vertices[vertexIndex]);
+	out.position = context.perspective * context.view * vec4<f32>(vertices[globalVertexIndex]);
 	return out;
 }
 

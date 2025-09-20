@@ -72,7 +72,7 @@ export class Cull {
 				},
 				{
 					binding: 1,
-					resource: mesh.meshes,
+					resource: {buffer: mesh.vertexCounts},
 				},
 				{
 					binding: 2,
@@ -80,7 +80,7 @@ export class Cull {
 				},
 				{
 					binding: 3,
-					resource: mesh.density,
+					resource: {buffer: mesh.density},
 				},
 			],
 		});

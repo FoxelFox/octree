@@ -2,12 +2,6 @@ enable f16;
 
 #import "../../data/context.wgsl"
 
-struct Mesh {
-	vertexCount: u32,
-	vertices: array<vec4<f16>, 1536>,
-	normals: array<vec3<f16>, 1536>,
-	colors: array<u32, 1536>, // Packed RGBA colors per vertex
-}
 
 struct Command {
 	vertexCount: u32,
@@ -28,9 +22,12 @@ struct VoxelData {
 @group(1) @binding(1) var<uniform> offset: vec3<u32>;
 
 // Output
-@group(0) @binding(1) var<storage, read_write> meshes: array<Mesh>;
-@group(0) @binding(2) var<storage, read_write> commands: array<Command>;
-@group(0) @binding(3) var<storage, read_write> density: array<u32>;
+@group(0) @binding(1) var<storage, read_write> vertexCounts: array<u32>;
+@group(0) @binding(2) var<storage, read_write> vertices: array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read_write> normals: array<vec3<f16>>;
+@group(0) @binding(4) var<storage, read_write> colors: array<u32>;
+@group(0) @binding(5) var<storage, read_write> commands: array<Command>;
+@group(0) @binding(6) var<storage, read_write> density: array<u32>;
 
 
 // Marching cubes edge table - which edges to interpolate for each configuration
@@ -467,7 +464,7 @@ fn interpolateNormal(n1: vec3<f32>, n2: vec3<f32>, val1: f32, val2: f32) -> vec3
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
-	var mesh = Mesh();
+	var vertexCount = 0u;
 	var command = Command();
 	let actualId = id + offset;
 	let sSize = context.grid_size / COMPRESSION;
@@ -567,8 +564,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 					let edge2 = triangleConfig[i + 1];
 					let edge3 = triangleConfig[i + 2];
 
+					// Calculate global vertex indices
+					let baseVertexIndex = index * 1536u + vertexCount;
+
 					// Ensure we don't exceed vertex buffer capacity
-					if (mesh.vertexCount + 3 <= 1536 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
+					if (vertexCount + 3 <= 1536 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
 						let v1 = vertexList[edge1];
 						let v2 = vertexList[edge2];
 						let v3 = vertexList[edge3];
@@ -581,19 +581,19 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let c2 = colorList[edge2];
 						let c3 = colorList[edge3];
 
-						mesh.vertices[mesh.vertexCount] = vec4<f16>(vec3<f16>(v1), 1.0h);
-						mesh.vertices[mesh.vertexCount + 1] = vec4<f16>(vec3<f16>(v2), 1.0h);
-						mesh.vertices[mesh.vertexCount + 2] = vec4<f16>(vec3<f16>(v3), 1.0h);
+						vertices[baseVertexIndex] = vec4<f16>(vec3<f16>(v1), 1.0h);
+						vertices[baseVertexIndex + 1] = vec4<f16>(vec3<f16>(v2), 1.0h);
+						vertices[baseVertexIndex + 2] = vec4<f16>(vec3<f16>(v3), 1.0h);
 
-						mesh.normals[mesh.vertexCount] = vec3<f16>(n1);
-						mesh.normals[mesh.vertexCount + 1] = vec3<f16>(n2);
-						mesh.normals[mesh.vertexCount + 2] = vec3<f16>(n3);
+						normals[baseVertexIndex] = vec3<f16>(n1);
+						normals[baseVertexIndex + 1] = vec3<f16>(n2);
+						normals[baseVertexIndex + 2] = vec3<f16>(n3);
 
-						mesh.colors[mesh.vertexCount] = c1;
-						mesh.colors[mesh.vertexCount + 1] = c2;
-						mesh.colors[mesh.vertexCount + 2] = c3;
+						colors[baseVertexIndex] = c1;
+						colors[baseVertexIndex + 1] = c2;
+						colors[baseVertexIndex + 2] = c3;
 
-						mesh.vertexCount += 3u;
+						vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
 						break; // End of triangles for this configuration
 					}
@@ -602,9 +602,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		}
 	}
 
-	meshes[index] = mesh;
+	vertexCounts[index] = vertexCount;
 
-	command.vertexCount = mesh.vertexCount;
+	command.vertexCount = vertexCount;
 	command.instanceCount = 1u;
 	command.firstVertex = 0u;
 	command.firstInstance = index;

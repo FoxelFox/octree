@@ -7,7 +7,10 @@ export class Mesh {
 	pipeline: GPUComputePipeline;
 	bindGroup: GPUBindGroup;
 	contextBindGroup: GPUBindGroup;
-	meshes: GPUBuffer;
+	vertexCounts: GPUBuffer;
+	vertices: GPUBuffer;
+	normals: GPUBuffer;
+	colors: GPUBuffer;
 	commands: GPUBuffer;
 	density: GPUBuffer;
 	offsetBuffer: GPUBuffer;
@@ -18,15 +21,26 @@ export class Mesh {
 
 		const sSize = gridSize / compression;
 		const maxMeshCount = sSize * sSize * sSize;
-		const maxMeshSize =
-			4 + // vertexCount (u32 = 4 bytes)
-			12 + // padding to align vertices array to 16-byte boundary
-			1536 * 8 + // vertices (vec4<f16> = 8 bytes each)
-			1536 * 8 + // normals (vec3<f16> = 8 bytes each in array, padded)
-			1536 * 4; // colors (u32 = 4 bytes each)
+		const maxVertices = maxMeshCount * 1536; // Maximum vertices across all meshes
 
-		this.meshes = device.createBuffer({
-			size: maxMeshSize * maxMeshCount,
+		// Separate buffers for mesh data
+		this.vertexCounts = device.createBuffer({
+			size: 4 * maxMeshCount, // u32 = 4 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.vertices = device.createBuffer({
+			size: 8 * maxVertices, // vec4<f16> = 8 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.normals = device.createBuffer({
+			size: 8 * maxVertices, // vec3<f16> = 8 bytes each (with padding)
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.colors = device.createBuffer({
+			size: 4 * maxVertices, // u32 = 4 bytes each
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
@@ -71,14 +85,26 @@ export class Mesh {
 				},
 				{
 					binding: 1,
-					resource: { buffer: this.meshes }, // Output
+					resource: { buffer: this.vertexCounts }, // Output
 				},
 				{
 					binding: 2,
-					resource: { buffer: this.commands }, // Output
+					resource: { buffer: this.vertices }, // Output
 				},
 				{
 					binding: 3,
+					resource: { buffer: this.normals }, // Output
+				},
+				{
+					binding: 4,
+					resource: { buffer: this.colors }, // Output
+				},
+				{
+					binding: 5,
+					resource: { buffer: this.commands }, // Output
+				},
+				{
+					binding: 6,
 					resource: { buffer: this.density }, // Output
 				},
 			],
