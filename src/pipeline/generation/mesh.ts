@@ -2,6 +2,7 @@ import { compression, contextUniform, device, gridSize } from "../../index";
 import shader from "./mesh.wgsl";
 import { Noise } from "./noise";
 import { RenderTimer } from "../timing";
+import { EDGE_TABLE, TRIANGLE_TABLE } from "./marchingCubeTables";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
@@ -14,6 +15,8 @@ export class Mesh {
 	commands: GPUBuffer;
 	density: GPUBuffer;
 	offsetBuffer: GPUBuffer;
+	edgeTableBuffer: GPUBuffer;
+	triangleTableBuffer: GPUBuffer;
 	timer: RenderTimer;
 
 	init(noise: Noise) {
@@ -61,6 +64,19 @@ export class Mesh {
 			size: 16, // vec3<u32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
+
+		// Create and initialize lookup table buffers
+		this.edgeTableBuffer = device.createBuffer({
+			size: EDGE_TABLE.byteLength,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(this.edgeTableBuffer, 0, EDGE_TABLE);
+
+		this.triangleTableBuffer = device.createBuffer({
+			size: TRIANGLE_TABLE.byteLength,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+		device.queue.writeBuffer(this.triangleTableBuffer, 0, TRIANGLE_TABLE);
 
 		const shaderModule = device.createShaderModule({
 			code: shader,
@@ -121,6 +137,14 @@ export class Mesh {
 				{
 					binding: 1,
 					resource: { buffer: this.offsetBuffer },
+				},
+				{
+					binding: 2,
+					resource: { buffer: this.edgeTableBuffer },
+				},
+				{
+					binding: 3,
+					resource: { buffer: this.triangleTableBuffer },
 				},
 			],
 		});
