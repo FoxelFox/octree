@@ -1,11 +1,11 @@
-import {canvas, contextUniform, device, gridSize} from "../../index";
-import {Block} from "../rendering/block";
-import {Noise} from "./noise";
-import {Mesh} from "./mesh";
-import {Cull} from "../rendering/cull";
-import {Light} from "../rendering/light";
-import editShader from "./voxel_edit.wgsl" with {type: "text"};
-import {RenderTimer} from "../timing";
+import { canvas, contextUniform, device, gridSize } from '../../index';
+import { Block } from '../rendering/block';
+import { Noise } from './noise';
+import { Mesh } from './mesh';
+import { Cull } from '../rendering/cull';
+import { Light } from '../rendering/light';
+import editShader from './voxel_edit.wgsl' with { type: 'text' };
+import { RenderTimer } from '../timing';
 
 interface VoxelEditCommand {
 	worldPosition: Float32Array;
@@ -48,13 +48,19 @@ export class VoxelEditor {
 	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
-	constructor(block: Block, noise: Noise, mesh: Mesh, cull: Cull, light: Light) {
+	constructor(
+		block: Block,
+		noise: Noise,
+		mesh: Mesh,
+		cull: Cull,
+		light: Light
+	) {
 		this.block = block;
 		this.noise = noise;
 		this.mesh = mesh;
 		this.cull = cull;
 		this.light = light;
-		this.timer = new RenderTimer("voxel_editor");
+		this.timer = new RenderTimer('voxel_editor');
 
 		this.initPositionReading();
 		this.initVoxelEditing();
@@ -63,8 +69,8 @@ export class VoxelEditor {
 	private initPositionReading() {
 		// Create 1x1 texture to read center pixel
 		this.positionReadTexture = device.createTexture({
-			size: {width: 1, height: 1},
-			format: "rgba32float",
+			size: { width: 1, height: 1 },
+			format: 'rgba32float',
 			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
 		});
 
@@ -85,39 +91,39 @@ export class VoxelEditor {
 
 		// Create edit compute pipeline
 		this.editPipeline = device.createComputePipeline({
-			label: "Voxel Edit",
-			layout: "auto",
+			label: 'Voxel Edit',
+			layout: 'auto',
 			compute: {
 				module: device.createShaderModule({
 					code: editShader,
 				}),
-				entryPoint: "main",
+				entryPoint: 'main',
 			},
 		});
 
 		// Create bind groups
 		this.editBindGroup = device.createBindGroup({
-			label: "Voxel Edit Data",
+			label: 'Voxel Edit Data',
 			layout: this.editPipeline.getBindGroupLayout(0),
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: this.noise.noiseBuffer},
+					resource: { buffer: this.noise.noiseBuffer },
 				},
 				{
 					binding: 1,
-					resource: {buffer: this.editParamsBuffer},
+					resource: { buffer: this.editParamsBuffer },
 				},
 			],
 		});
 
 		this.editUniformBindGroup = device.createBindGroup({
-			label: "Voxel Edit Context",
+			label: 'Voxel Edit Context',
 			layout: this.editPipeline.getBindGroupLayout(1),
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
+					resource: { buffer: contextUniform.uniformBuffer },
 				},
 			],
 		});
@@ -134,7 +140,7 @@ export class VoxelEditor {
 		this.isReadingPosition = true;
 
 		try {
-			const encoder = device.createCommandEncoder({label: "Position Read"});
+			const encoder = device.createCommandEncoder({ label: 'Position Read' });
 
 			// Calculate center pixel coordinates
 			const centerX = Math.floor(canvas.width / 2);
@@ -144,13 +150,13 @@ export class VoxelEditor {
 			encoder.copyTextureToTexture(
 				{
 					texture: this.block.positionTexture,
-					origin: {x: centerX, y: centerY},
+					origin: { x: centerX, y: centerY },
 				},
 				{
 					texture: this.positionReadTexture,
-					origin: {x: 0, y: 0},
+					origin: { x: 0, y: 0 },
 				},
-				{width: 1, height: 1}
+				{ width: 1, height: 1 }
 			);
 
 			// Copy texture data to buffer
@@ -163,21 +169,22 @@ export class VoxelEditor {
 					bytesPerRow: 256, // Must be multiple of 256
 					rowsPerImage: 1,
 				},
-				{width: 1, height: 1}
+				{ width: 1, height: 1 }
 			);
 
 			device.queue.submit([encoder.finish()]);
 
 			// Read the data
 			await this.positionReadBuffer.mapAsync(GPUMapMode.READ);
-			const mappedData = new Float32Array(this.positionReadBuffer.getMappedRange());
+			const mappedData = new Float32Array(
+				this.positionReadBuffer.getMappedRange()
+			);
 			this.currentWorldPosition = new Float32Array(mappedData);
 			this.positionReadBuffer.unmap();
 
 			return this.currentWorldPosition;
-
 		} catch (error) {
-			console.error("Error reading position:", error);
+			console.error('Error reading position:', error);
 			return null;
 		} finally {
 			this.isReadingPosition = false;
@@ -201,12 +208,16 @@ export class VoxelEditor {
 	/**
 	 * Queue an edit command for async processing
 	 */
-	private queueEdit(worldPosition: Float32Array, radius: number, operation: number) {
+	private queueEdit(
+		worldPosition: Float32Array,
+		radius: number,
+		operation: number
+	) {
 		const command: VoxelEditCommand = {
 			worldPosition: new Float32Array(worldPosition),
 			radius,
 			operation,
-			timestamp: performance.now()
+			timestamp: performance.now(),
 		};
 		this.editQueue.push(command);
 
@@ -234,7 +245,7 @@ export class VoxelEditor {
 		this.changeBounds = null;
 
 		// Execute all commands without blocking
-		commandsToProcess.forEach(command => {
+		commandsToProcess.forEach((command) => {
 			this.executeEditCommand(command);
 			this.updateChangeBounds(command.worldPosition, command.radius);
 		});
@@ -256,14 +267,14 @@ export class VoxelEditor {
 		params[0] = command.worldPosition[0]; // position.x
 		params[1] = command.worldPosition[1]; // position.y
 		params[2] = command.worldPosition[2]; // position.z
-		params[3] = command.radius;           // radius
-		params[4] = command.operation;        // operation (0=remove, 1=add)
+		params[3] = command.radius; // radius
+		params[4] = command.operation; // operation (0=remove, 1=add)
 		// params[5-7] are padding
 
 		device.queue.writeBuffer(this.editParamsBuffer, 0, params);
 
 		// Run edit compute shader
-		const encoder = device.createCommandEncoder({label: "Voxel Edit"});
+		const encoder = device.createCommandEncoder({ label: 'Voxel Edit' });
 		const computePass = encoder.beginComputePass({
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
@@ -283,7 +294,7 @@ export class VoxelEditor {
 		computePass.end();
 		this.timer.resolveTimestamps(encoder);
 		device.queue.submit([encoder.finish()]);
-		
+
 		// Read timing after submission
 		this.timer.readTimestamps();
 	}
@@ -310,12 +321,12 @@ export class VoxelEditor {
 		const minBound = [
 			worldPosition[0] - radius,
 			worldPosition[1] - radius,
-			worldPosition[2] - radius
+			worldPosition[2] - radius,
 		] as [number, number, number];
 		const maxBound = [
 			worldPosition[0] + radius,
 			worldPosition[1] + radius,
-			worldPosition[2] + radius
+			worldPosition[2] + radius,
 		] as [number, number, number];
 
 		if (!this.changeBounds) {
@@ -323,8 +334,14 @@ export class VoxelEditor {
 		} else {
 			// Expand existing bounds
 			for (let i = 0; i < 3; i++) {
-				this.changeBounds.min[i] = Math.min(this.changeBounds.min[i], minBound[i]);
-				this.changeBounds.max[i] = Math.max(this.changeBounds.max[i], maxBound[i]);
+				this.changeBounds.min[i] = Math.min(
+					this.changeBounds.min[i],
+					minBound[i]
+				);
+				this.changeBounds.max[i] = Math.max(
+					this.changeBounds.max[i],
+					maxBound[i]
+				);
 			}
 		}
 	}
@@ -334,13 +351,15 @@ export class VoxelEditor {
 	 */
 	private regenerateMeshesAsync() {
 		// Generate new meshes from modified voxel data
-		const encoder = device.createCommandEncoder({label: "Async Mesh Regeneration"});
+		const encoder = device.createCommandEncoder({
+			label: 'Async Mesh Regeneration',
+		});
 
 		// Update mesh generation with change bounds
 		this.mesh.update(encoder, this.changeBounds);
 
 		device.queue.submit([encoder.finish()]);
-		
+
 		// Invalidate lighting after voxel changes
 		this.light.invalidate();
 	}

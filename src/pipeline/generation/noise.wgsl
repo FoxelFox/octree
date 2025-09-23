@@ -20,8 +20,15 @@ fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
 
     // Generate rocky surface base using fractal noise
     let surface_noise = rock_voronoi3(pos_f / 80.0, 2, 10);
+
+
     let surface_detail = rock_voronoi3(pos_f / 100.0, 8, 10) * 0.3;
     let rocky_surface = surface_noise + surface_detail;
+
+
+
+
+
 
     // Create a base rocky terrain with height variation
     let terrain_height = 64.0; // Base terrain level

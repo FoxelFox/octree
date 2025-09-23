@@ -1,8 +1,8 @@
-import { compression, contextUniform, device, gridSize } from "../../index";
-import shader from "./mesh.wgsl";
-import { Noise } from "./noise";
-import { RenderTimer } from "../timing";
-import { EDGE_TABLE, TRIANGLE_TABLE } from "./marchingCubeTables";
+import { compression, contextUniform, device, gridSize } from '../../index';
+import shader from './mesh.wgsl';
+import { Noise } from './noise';
+import { RenderTimer } from '../timing';
+import { EDGE_TABLE, TRIANGLE_TABLE } from './marchingCubeTables';
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
@@ -20,7 +20,7 @@ export class Mesh {
 	timer: RenderTimer;
 
 	init(noise: Noise) {
-		this.timer = new RenderTimer("mesh");
+		this.timer = new RenderTimer('mesh');
 
 		const sSize = gridSize / compression;
 		const maxMeshCount = sSize * sSize * sSize;
@@ -83,16 +83,16 @@ export class Mesh {
 		});
 
 		this.pipeline = device.createComputePipeline({
-			label: "Mesh",
-			layout: "auto",
+			label: 'Mesh',
+			layout: 'auto',
 			compute: {
 				module: shaderModule,
-				entryPoint: "main",
+				entryPoint: 'main',
 			},
 		});
 
 		this.bindGroup = device.createBindGroup({
-			label: "Mesh",
+			label: 'Mesh',
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
 				{
@@ -127,7 +127,7 @@ export class Mesh {
 		});
 
 		this.contextBindGroup = device.createBindGroup({
-			label: "Mesh Context",
+			label: 'Mesh Context',
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{
@@ -152,7 +152,7 @@ export class Mesh {
 
 	update(
 		encoder: GPUCommandEncoder,
-		bounds?: { min: [number, number, number]; max: [number, number, number] },
+		bounds?: { min: [number, number, number]; max: [number, number, number] }
 	) {
 		if (bounds) {
 			// Calculate mesh chunk bounds in compressed grid space
@@ -208,7 +208,7 @@ export class Mesh {
 			pass.dispatchWorkgroups(
 				workgroupsPerDim,
 				workgroupsPerDim,
-				workgroupsPerDim,
+				workgroupsPerDim
 			);
 			pass.end();
 		}
