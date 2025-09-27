@@ -1,5 +1,14 @@
 # Automatic Chunk System Implementation
 
+## Chunk Buffer/Bind Group Refactor
+- [ ] Move per-chunk GPU buffers into `Chunk` so creation/destruction lives with the data container.
+- [ ] Add `registerChunk(chunk)` / `unregisterChunk(chunk)` hooks to each pipeline (`Mesh`, `Light`, `Cull`, `Block`) to create and destroy bind groups tied to the chunk’s buffers.
+- [ ] Cache pipeline-specific bind groups in `Map<Chunk, …>` structures and reuse them across frames instead of rebuilding every dispatch.
+- [ ] Support dynamic uniform/storage offsets (or per-chunk buffer binding) where a single bind group can service multiple chunks.
+- [ ] Update streaming lifecycle: when a chunk is spawned, create its buffers then call each pipeline hook; on unload, call hooks before freeing buffers.
+- [ ] Audit shaders for chunk-local resource indexing (e.g., pass chunk ID or offsets) so the new binding scheme stays valid.
+- [ ] Write teardown utilities to destroy bind groups/buffers when a chunk retires to avoid leaks.
+
 ## Overview
 Restructure the current single 256³ world into an infinite world system with 256×256×256 voxel chunks. Each chunk contains 32³ meshlets (8×8×8 voxels each) with individual density and light cache buffers. Target ~18 active chunks with automatic loading/unloading.
 

@@ -2,7 +2,7 @@ export class Chunk {
 	id: number
 	position: number[]
 	voxelData: GPUBuffer;    // noise and color
-	vertexCounts: GPUBuffer; // just for the cull pipeline to fast ignore empty meshlets (redundant because we also have it in the commands buffer)
+	vertexCounts: GPUBuffer; // just for the cull pipeline to fast ignore empty meshlets
 	commands: GPUBuffer;     // indirect draw commands
 
 	vertices: GPUBuffer;
