@@ -1,13 +1,20 @@
 export class Chunk {
 	id: number
 	position: number[]
-	meshes: GPUBuffer;
-	commands: GPUBuffer;
-	density: GPUBuffer;
-	voxelData: GPUBuffer; // noise and color
-	count: number = 0;
-	indices: Uint32Array;
-	light: GPUBuffer;
+	voxelData: GPUBuffer;    // noise and color
+	vertexCounts: GPUBuffer; // just for the cull pipeline to fast ignore empty meshlets (redundant because we also have it in the commands buffer)
+	commands: GPUBuffer;     // indirect draw commands
+
+	vertices: GPUBuffer;
+	normals: GPUBuffer;
+	colors: GPUBuffer;
+	indices: Uint32Array;    // indices for meshlets that are actually needed to be rendered
+	density: GPUBuffer;      // used for density occlusion culling and light blocker
+
+
+	light: GPUBuffer;		// double buffered light data
+	nextLight: GPUBuffer;   // double buffered light data
+
 
 	constructor(id: number, position: number[]) {
 		this.id = id;
