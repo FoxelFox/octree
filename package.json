@@ -4,17 +4,12 @@
 		"build": "bun run build.ts",
 		"dev": "bun run build.ts --dev",
 		"start": "http-server dist -c-1",
-		"lint": "eslint --fix",
 		"format": "prettier --write ."
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
-		"@typescript-eslint/eslint-plugin": "^8.44.1",
-		"@typescript-eslint/parser": "^8.44.1",
 		"@webgpu/types": "^0.1.64",
-		"eslint": "^9.36.0",
-		"http-server": "^14.0.0",
-		"prettier": "^3.6.2"
+		"http-server": "^14.0.0"
 	},
 	"dependencies": {
 		"wgpu-matrix": "^3.4.0"

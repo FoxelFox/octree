@@ -1,15 +1,8 @@
 import { GPUContext } from "./gpu";
 import { ContextUniform } from "./data/context";
-import { Noise } from "./pipeline/generation/noise";
-import { Block } from "./pipeline/rendering/block";
-import { Mesh } from "./pipeline/generation/mesh";
-import { Cull } from "./pipeline/rendering/cull";
-import { Light } from "./pipeline/rendering/light";
-import { VoxelEditor } from "./pipeline/generation/voxel_editor";
 import { TimingDisplay } from "./ui/timing-display";
 import { FrameGraphManager } from "./ui/frame-graph-manager";
-import { VoxelEditorHandler } from "./ui/voxel-editor";
-import {Streaming} from "./chunk/streaming";
+import { Streaming } from "./chunk/streaming";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -35,11 +28,9 @@ const uniforms = [contextUniform];
 
 const streaming = new Streaming();
 
-
 // --- UI Components ---
 const timingDisplay = new TimingDisplay();
 const frameGraphManager = new FrameGraphManager();
-
 
 async function runOneTimeSetup() {
 	gpu.update();
@@ -49,7 +40,6 @@ async function runOneTimeSetup() {
 	}
 
 	streaming.init();
-
 }
 
 await runOneTimeSetup();
@@ -92,7 +82,13 @@ function loop() {
 	// Update timing display
 	const stats = frameGraphManager.getFrameGraph().getCurrentStats();
 
-	timingDisplay.update(currentRenderTime, streaming.light.renderTime, cpuFrameTime, stats, streaming.cull.count);
+	timingDisplay.update(
+		currentRenderTime,
+		streaming.light.renderTime,
+		cpuFrameTime,
+		stats,
+		streaming.cull.count,
+	);
 
 	requestAnimationFrame(loop);
 }
