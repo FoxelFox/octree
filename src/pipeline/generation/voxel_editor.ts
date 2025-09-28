@@ -1,17 +1,17 @@
-import { canvas, contextUniform, device, gridSize } from '../../index';
-import { Block } from '../rendering/block';
-import { Noise } from './noise';
-import { Mesh } from './mesh';
-import { Cull } from '../rendering/cull';
-import { Light } from '../rendering/light';
-import editShader from './voxel_edit.wgsl' with { type: 'text' };
-import { RenderTimer } from '../timing';
+import {canvas, contextUniform, device, gridSize} from '../../index';
+import editShader from './voxel_edit.wgsl' with {type: 'text'};
+import {RenderTimer} from '../timing';
+import {Chunk} from "../../chunk/chunk";
+import {Block} from "../rendering/block";
+import {Mesh} from "./mesh";
+import {Light} from "../rendering/light";
 
 interface VoxelEditCommand {
 	worldPosition: Float32Array;
 	radius: number;
 	operation: number; // 0 = remove, 1 = add
 	timestamp: number;
+	chunk: Chunk;
 }
 
 interface ChangeBounds {
@@ -22,9 +22,7 @@ interface ChangeBounds {
 export class VoxelEditor {
 	// Dependencies
 	private block: Block;
-	private noise: Noise;
 	private mesh: Mesh;
-	private cull: Cull;
 	private light: Light;
 
 	// Position reading
@@ -33,7 +31,8 @@ export class VoxelEditor {
 
 	// Voxel editing
 	private editPipeline: GPUComputePipeline;
-	private editBindGroup: GPUBindGroup;
+	private chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+	private activeChunk: Chunk | null = null;
 	private editUniformBindGroup: GPUBindGroup;
 	private editParamsBuffer: GPUBuffer;
 
@@ -48,17 +47,9 @@ export class VoxelEditor {
 	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
-	constructor(
-		block: Block,
-		noise: Noise,
-		mesh: Mesh,
-		cull: Cull,
-		light: Light
-	) {
+	constructor(block: Block, mesh: Mesh, light: Light) {
 		this.block = block;
-		this.noise = noise;
 		this.mesh = mesh;
-		this.cull = cull;
 		this.light = light;
 		this.timer = new RenderTimer('voxel_editor');
 
@@ -66,10 +57,143 @@ export class VoxelEditor {
 		this.initVoxelEditing();
 	}
 
+	/**
+	 * Get render time for voxel editing operations
+	 */
+	get renderTime(): number {
+		return this.timer.renderTime;
+	}
+
+	/**
+	 * Reads the world position at screen center from the G-buffer position texture
+	 */
+	async readPositionAtCenter(): Promise<Float32Array | null> {
+		if (this.isReadingPosition) {
+			return this.currentWorldPosition;
+		}
+
+		this.isReadingPosition = true;
+
+		try {
+			const encoder = device.createCommandEncoder({label: 'Position Read'});
+
+			// Calculate center pixel coordinates
+			const centerX = Math.floor(canvas.width / 2);
+			const centerY = Math.floor(canvas.height / 2);
+
+			// Copy center pixel from position texture to 1x1 texture
+			encoder.copyTextureToTexture(
+				{
+					texture: this.block.positionTexture,
+					origin: {x: centerX, y: centerY},
+				},
+				{
+					texture: this.positionReadTexture,
+					origin: {x: 0, y: 0},
+				},
+				{width: 1, height: 1}
+			);
+
+			// Copy texture data to buffer
+			encoder.copyTextureToBuffer(
+				{
+					texture: this.positionReadTexture,
+				},
+				{
+					buffer: this.positionReadBuffer,
+					bytesPerRow: 256, // Must be multiple of 256
+					rowsPerImage: 1,
+				},
+				{width: 1, height: 1}
+			);
+
+			device.queue.submit([encoder.finish()]);
+
+			// Read the data
+			await this.positionReadBuffer.mapAsync(GPUMapMode.READ);
+			const mappedData = new Float32Array(
+				this.positionReadBuffer.getMappedRange()
+			);
+			this.currentWorldPosition = new Float32Array(mappedData);
+			this.positionReadBuffer.unmap();
+
+			return this.currentWorldPosition;
+		} catch (error) {
+			console.error('Error reading position:', error);
+			return null;
+		} finally {
+			this.isReadingPosition = false;
+		}
+	}
+
+	/**
+	 * Queue voxels to be added in a sphere around the target position (non-blocking)
+	 */
+	addVoxels(worldPosition: Float32Array, radius: number = 2.0, chunk?: Chunk) {
+		this.queueEdit(worldPosition, radius, 1, chunk); // 1 = add operation
+	}
+
+	/**
+	 * Queue voxels to be removed in a sphere around the target position (non-blocking)
+	 */
+	removeVoxels(worldPosition: Float32Array, radius: number = 2.0, chunk?: Chunk) {
+		this.queueEdit(worldPosition, radius, 0, chunk); // 0 = remove operation
+	}
+
+	registerChunk(chunk: Chunk) {
+		// Create bind groups
+		const bindGroup = device.createBindGroup({
+			label: 'Voxel Edit Data',
+			layout: this.editPipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: chunk.voxelData},
+				},
+				{
+					binding: 1,
+					resource: {buffer: this.editParamsBuffer},
+				},
+			],
+		});
+
+		this.chunkBindGroups.set(chunk, bindGroup);
+		if (!this.activeChunk) {
+			this.activeChunk = chunk;
+		}
+	}
+
+	/**
+	 * Get the current world position at screen center
+	 */
+	getCurrentPosition(): Float32Array | null {
+		return this.currentWorldPosition;
+	}
+
+	/**
+	 * Check if there's valid geometry at screen center
+	 */
+	hasGeometryAtCenter(): boolean {
+		if (!this.currentWorldPosition) return false;
+
+		// Check if the w component (distance) indicates valid geometry
+		// In the deferred renderer, valid geometry has a meaningful distance value
+		return this.currentWorldPosition[3] > 0;
+	}
+
+	/**
+	 * Cleanup resources
+	 */
+	destroy() {
+		this.positionReadTexture?.destroy();
+		this.positionReadBuffer?.destroy();
+		this.editParamsBuffer?.destroy();
+	}
+
 	private initPositionReading() {
 		// Create 1x1 texture to read center pixel
 		this.positionReadTexture = device.createTexture({
-			size: { width: 1, height: 1 },
+			size: {width: 1, height: 1},
 			format: 'rgba32float',
 			usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
 		});
@@ -101,21 +225,6 @@ export class VoxelEditor {
 			},
 		});
 
-		// Create bind groups
-		this.editBindGroup = device.createBindGroup({
-			label: 'Voxel Edit Data',
-			layout: this.editPipeline.getBindGroupLayout(0),
-			entries: [
-				{
-					binding: 0,
-					resource: { buffer: this.noise.noiseBuffer },
-				},
-				{
-					binding: 1,
-					resource: { buffer: this.editParamsBuffer },
-				},
-			],
-		});
 
 		this.editUniformBindGroup = device.createBindGroup({
 			label: 'Voxel Edit Context',
@@ -123,86 +232,10 @@ export class VoxelEditor {
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: contextUniform.uniformBuffer },
+					resource: {buffer: contextUniform.uniformBuffer},
 				},
 			],
 		});
-	}
-
-	/**
-	 * Reads the world position at screen center from the G-buffer position texture
-	 */
-	async readPositionAtCenter(): Promise<Float32Array | null> {
-		if (this.isReadingPosition) {
-			return this.currentWorldPosition;
-		}
-
-		this.isReadingPosition = true;
-
-		try {
-			const encoder = device.createCommandEncoder({ label: 'Position Read' });
-
-			// Calculate center pixel coordinates
-			const centerX = Math.floor(canvas.width / 2);
-			const centerY = Math.floor(canvas.height / 2);
-
-			// Copy center pixel from position texture to 1x1 texture
-			encoder.copyTextureToTexture(
-				{
-					texture: this.block.positionTexture,
-					origin: { x: centerX, y: centerY },
-				},
-				{
-					texture: this.positionReadTexture,
-					origin: { x: 0, y: 0 },
-				},
-				{ width: 1, height: 1 }
-			);
-
-			// Copy texture data to buffer
-			encoder.copyTextureToBuffer(
-				{
-					texture: this.positionReadTexture,
-				},
-				{
-					buffer: this.positionReadBuffer,
-					bytesPerRow: 256, // Must be multiple of 256
-					rowsPerImage: 1,
-				},
-				{ width: 1, height: 1 }
-			);
-
-			device.queue.submit([encoder.finish()]);
-
-			// Read the data
-			await this.positionReadBuffer.mapAsync(GPUMapMode.READ);
-			const mappedData = new Float32Array(
-				this.positionReadBuffer.getMappedRange()
-			);
-			this.currentWorldPosition = new Float32Array(mappedData);
-			this.positionReadBuffer.unmap();
-
-			return this.currentWorldPosition;
-		} catch (error) {
-			console.error('Error reading position:', error);
-			return null;
-		} finally {
-			this.isReadingPosition = false;
-		}
-	}
-
-	/**
-	 * Queue voxels to be added in a sphere around the target position (non-blocking)
-	 */
-	addVoxels(worldPosition: Float32Array, radius: number = 2.0) {
-		this.queueEdit(worldPosition, radius, 1); // 1 = add operation
-	}
-
-	/**
-	 * Queue voxels to be removed in a sphere around the target position (non-blocking)
-	 */
-	removeVoxels(worldPosition: Float32Array, radius: number = 2.0) {
-		this.queueEdit(worldPosition, radius, 0); // 0 = remove operation
 	}
 
 	/**
@@ -211,13 +244,22 @@ export class VoxelEditor {
 	private queueEdit(
 		worldPosition: Float32Array,
 		radius: number,
-		operation: number
+		operation: number,
+		chunk?: Chunk
 	) {
+		const targetChunk = chunk ?? this.activeChunk;
+		if (!targetChunk) {
+			console.warn('Voxel edit requested before chunk registration.');
+			return;
+		}
+		this.activeChunk = targetChunk;
+
 		const command: VoxelEditCommand = {
 			worldPosition: new Float32Array(worldPosition),
 			radius,
 			operation,
 			timestamp: performance.now(),
+			chunk: targetChunk,
 		};
 		this.editQueue.push(command);
 
@@ -245,14 +287,19 @@ export class VoxelEditor {
 		this.changeBounds = null;
 
 		// Execute all commands without blocking
+		const firstChunk = commandsToProcess[0]?.chunk;
 		commandsToProcess.forEach((command) => {
+			if (command.chunk !== firstChunk) {
+				console.warn('Voxel edit commands span multiple chunks; only the first chunk will be updated.');
+				return;
+			}
 			this.executeEditCommand(command);
 			this.updateChangeBounds(command.worldPosition, command.radius);
 		});
 
 		// Schedule mesh regeneration if any edits were processed
-		if (!this.pendingMeshUpdate) {
-			this.scheduleAsyncMeshUpdate();
+		if (!this.pendingMeshUpdate && firstChunk) {
+			this.scheduleAsyncMeshUpdate(firstChunk);
 		}
 
 		this.isProcessingEdits = false;
@@ -274,13 +321,19 @@ export class VoxelEditor {
 		device.queue.writeBuffer(this.editParamsBuffer, 0, params);
 
 		// Run edit compute shader
-		const encoder = device.createCommandEncoder({ label: 'Voxel Edit' });
+		const bindGroup = this.chunkBindGroups.get(command.chunk);
+		if (!bindGroup) {
+			console.warn('No voxel edit bind group for chunk', command.chunk.id);
+			return;
+		}
+
+		const encoder = device.createCommandEncoder({label: 'Voxel Edit'});
 		const computePass = encoder.beginComputePass({
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
 
 		computePass.setPipeline(this.editPipeline);
-		computePass.setBindGroup(0, this.editBindGroup);
+		computePass.setBindGroup(0, bindGroup);
 		computePass.setBindGroup(1, this.editUniformBindGroup);
 
 		// Dispatch to cover all voxels (could be optimized to only affect nearby voxels)
@@ -302,14 +355,14 @@ export class VoxelEditor {
 	/**
 	 * Schedule async mesh regeneration that doesn't block the render loop
 	 */
-	private scheduleAsyncMeshUpdate() {
+	private scheduleAsyncMeshUpdate(chunk: Chunk) {
 		if (this.pendingMeshUpdate) return;
 
 		this.pendingMeshUpdate = true;
 
 		// Use a microtask to defer the mesh update without blocking
 		queueMicrotask(() => {
-			this.regenerateMeshesAsync();
+			this.regenerateMeshesAsync(chunk);
 			this.pendingMeshUpdate = false;
 		});
 	}
@@ -330,7 +383,7 @@ export class VoxelEditor {
 		] as [number, number, number];
 
 		if (!this.changeBounds) {
-			this.changeBounds = { min: minBound, max: maxBound };
+			this.changeBounds = {min: minBound, max: maxBound};
 		} else {
 			// Expand existing bounds
 			for (let i = 0; i < 3; i++) {
@@ -349,52 +402,18 @@ export class VoxelEditor {
 	/**
 	 * Regenerate meshes asynchronously
 	 */
-	private regenerateMeshesAsync() {
+	private regenerateMeshesAsync(chunk: Chunk) {
 		// Generate new meshes from modified voxel data
 		const encoder = device.createCommandEncoder({
 			label: 'Async Mesh Regeneration',
 		});
 
 		// Update mesh generation with change bounds
-		this.mesh.update(encoder, this.changeBounds);
+		this.mesh.update(encoder, chunk, this.changeBounds ?? undefined);
 
 		device.queue.submit([encoder.finish()]);
 
 		// Invalidate lighting after voxel changes
 		this.light.invalidate();
-	}
-
-	/**
-	 * Get the current world position at screen center
-	 */
-	getCurrentPosition(): Float32Array | null {
-		return this.currentWorldPosition;
-	}
-
-	/**
-	 * Check if there's valid geometry at screen center
-	 */
-	hasGeometryAtCenter(): boolean {
-		if (!this.currentWorldPosition) return false;
-
-		// Check if the w component (distance) indicates valid geometry
-		// In the deferred renderer, valid geometry has a meaningful distance value
-		return this.currentWorldPosition[3] > 0;
-	}
-
-	/**
-	 * Get render time for voxel editing operations
-	 */
-	get renderTime(): number {
-		return this.timer.renderTime;
-	}
-
-	/**
-	 * Cleanup resources
-	 */
-	destroy() {
-		this.positionReadTexture?.destroy();
-		this.positionReadBuffer?.destroy();
-		this.editParamsBuffer?.destroy();
 	}
 }

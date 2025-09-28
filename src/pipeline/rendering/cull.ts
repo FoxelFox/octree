@@ -1,26 +1,25 @@
-import { compression, contextUniform, device, gridSize } from "../../index";
-import { Mesh } from "../generation/mesh";
-import { Noise } from "../generation/noise";
-import shader from "./cull.wgsl" with { type: "text" };
-import { RenderTimer } from "../timing";
+import {compression, contextUniform, device, gridSize} from "../../index";
+import shader from "./cull.wgsl" with {type: "text"};
+import {RenderTimer} from "../timing";
+import {Chunk} from "../../chunk/chunk";
 
 export class Cull {
 	counter: GPUBuffer;
 	counterReadback: GPUBuffer;
-	bindGroup: GPUBindGroup;
 	contextBindGroup: GPUBindGroup;
 	pipeline: GPUComputePipeline;
 	indicesBuffer: GPUBuffer;
 	indicesReadback: GPUBuffer;
 
+	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+
 	// output
 	count: number = 0;
-	indices: Uint32Array = new Uint32Array(0);
+	timer: RenderTimer;
 	private readbackInProgress = false;
 	private framesSinceUpdate = 0;
-	timer: RenderTimer;
 
-	init(noise: Noise, mesh: Mesh) {
+	constructor() {
 		this.timer = new RenderTimer("cull");
 
 		this.counter = device.createBuffer({
@@ -62,28 +61,6 @@ export class Cull {
 			},
 		});
 
-		this.bindGroup = device.createBindGroup({
-			layout: this.pipeline.getBindGroupLayout(0),
-			label: "Cull",
-			entries: [
-				{
-					binding: 0,
-					resource: this.counter,
-				},
-				{
-					binding: 1,
-					resource: {buffer: mesh.vertexCounts},
-				},
-				{
-					binding: 2,
-					resource: this.indicesBuffer,
-				},
-				{
-					binding: 3,
-					resource: {buffer: mesh.density},
-				},
-			],
-		});
 
 		this.contextBindGroup = device.createBindGroup({
 			label: "Cull Context",
@@ -91,13 +68,17 @@ export class Cull {
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: contextUniform.uniformBuffer },
+					resource: {buffer: contextUniform.uniformBuffer},
 				},
 			],
 		});
 	}
 
-	update(encoder: GPUCommandEncoder) {
+	get renderTime(): number {
+		return this.timer.renderTime;
+	}
+
+	update(encoder: GPUCommandEncoder, chunk: Chunk) {
 		// Reset counter before culling
 		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
 
@@ -105,7 +86,7 @@ export class Cull {
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
 		pass.setPipeline(this.pipeline);
-		pass.setBindGroup(0, this.bindGroup);
+		pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
 		pass.setBindGroup(1, this.contextBindGroup);
 
 		// Dispatch with 4x4x4 workgroup size
@@ -123,18 +104,54 @@ export class Cull {
 		this.framesSinceUpdate++;
 		if (!this.readbackInProgress && this.framesSinceUpdate >= 2) {
 			// Update every 2 frames
-			this.startAsyncReadback();
+			this.startAsyncReadback(chunk);
 			this.framesSinceUpdate = 0;
 		}
 	}
 
-	private startAsyncReadback() {
+
+	afterUpdate() {
+		this.timer.readTimestamps();
+	}
+
+	registerChunk(chunk: Chunk) {
+		const bindGroup = device.createBindGroup({
+			layout: this.pipeline.getBindGroupLayout(0),
+			label: "Cull",
+			entries: [
+				{
+					binding: 0,
+					resource: this.counter,
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunk.vertexCounts},
+				},
+				{
+					binding: 2,
+					resource: this.indicesBuffer,
+				},
+				{
+					binding: 3,
+					resource: {buffer: chunk.density},
+				},
+			],
+		});
+
+		this.chunkBindGroups.set(chunk, bindGroup);
+	}
+
+	unregisterChunk(chunk: Chunk) {
+		this.chunkBindGroups.delete(chunk);
+	}
+
+	private startAsyncReadback(chunk: Chunk) {
 		if (this.readbackInProgress) return;
 
 		this.readbackInProgress = true;
 
 		// Start async readback without blocking
-		this.performAsyncReadback()
+		this.performAsyncReadback(chunk)
 			.then(() => {
 				this.readbackInProgress = false;
 			})
@@ -144,7 +161,7 @@ export class Cull {
 			});
 	}
 
-	private async performAsyncReadback(): Promise<void> {
+	private async performAsyncReadback(chunk: Chunk): Promise<void> {
 		// Wait a frame to ensure GPU work is submitted
 		await new Promise((resolve) => requestAnimationFrame(resolve));
 
@@ -176,60 +193,10 @@ export class Cull {
 		await this.indicesReadback.mapAsync(GPUMapMode.READ);
 		const indicesData = this.indicesReadback.getMappedRange();
 		const readSize = Math.min(newCount * 4, this.indicesBuffer.size);
-		this.indices = new Uint32Array(indicesData.slice(0, readSize));
+		chunk.indices = new Uint32Array(indicesData.slice(0, readSize));
 		this.indicesReadback.unmap();
 
 		// Update count last, after we've used the consistent value
 		this.count = newCount;
-	}
-
-	async readback(): Promise<void> {
-		{
-			// first read how many indices we have
-			const encoder = device.createCommandEncoder();
-			encoder.copyBufferToBuffer(
-				this.counter,
-				0,
-				this.counterReadback,
-				0,
-				this.counter.size,
-			);
-			device.queue.submit([encoder.finish()]);
-
-			await this.counterReadback.mapAsync(GPUMapMode.READ);
-			const data = this.counterReadback.getMappedRange();
-			this.count = new Uint32Array(data)[0];
-			this.counterReadback.unmap();
-
-			console.log("Index Count", this.count);
-		}
-
-		{
-			// now only read the indices we need
-			const encoder = device.createCommandEncoder();
-			encoder.copyBufferToBuffer(
-				this.indicesBuffer,
-				0,
-				this.indicesReadback,
-				0,
-				this.count * 4,
-			);
-			device.queue.submit([encoder.finish()]);
-
-			await this.indicesReadback.mapAsync(GPUMapMode.READ);
-			const data = this.indicesReadback.getMappedRange();
-			this.indices = new Uint32Array(data.slice());
-			this.indicesReadback.unmap();
-
-			console.log("Indices", this.indices);
-		}
-	}
-
-	afterUpdate() {
-		this.timer.readTimestamps();
-	}
-
-	get renderTime(): number {
-		return this.timer.renderTime;
 	}
 }

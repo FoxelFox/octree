@@ -1,64 +1,21 @@
-import { compression, contextUniform, device, gridSize } from '../../index';
+import {compression, contextUniform, device, gridSize} from '../../index';
 import shader from './mesh.wgsl';
-import { Noise } from './noise';
-import { RenderTimer } from '../timing';
-import { EDGE_TABLE, TRIANGLE_TABLE } from './marchingCubeTables';
+import {RenderTimer} from '../timing';
+import {EDGE_TABLE, TRIANGLE_TABLE} from './marchingCubeTables';
+import {Chunk} from "../../chunk/chunk";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
-	bindGroup: GPUBindGroup;
 	contextBindGroup: GPUBindGroup;
-	vertexCounts: GPUBuffer;
-	vertices: GPUBuffer;
-	normals: GPUBuffer;
-	colors: GPUBuffer;
-	commands: GPUBuffer;
-	density: GPUBuffer;
 	offsetBuffer: GPUBuffer;
 	edgeTableBuffer: GPUBuffer;
 	triangleTableBuffer: GPUBuffer;
 	timer: RenderTimer;
 
-	init(noise: Noise) {
+	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+
+	constructor() {
 		this.timer = new RenderTimer('mesh');
-
-		const sSize = gridSize / compression;
-		const maxMeshCount = sSize * sSize * sSize;
-		const maxVertices = maxMeshCount * 1536; // Maximum vertices across all meshes
-
-		// Separate buffers for mesh data
-		this.vertexCounts = device.createBuffer({
-			size: 4 * maxMeshCount, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.vertices = device.createBuffer({
-			size: 8 * maxVertices, // vec4<f16> = 8 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.normals = device.createBuffer({
-			size: 8 * maxVertices, // vec3<f16> = 8 bytes each (with padding)
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.colors = device.createBuffer({
-			size: 4 * maxVertices, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.commands = device.createBuffer({
-			size: 16 * maxMeshCount,
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_SRC |
-				GPUBufferUsage.INDIRECT,
-		});
-
-		this.density = device.createBuffer({
-			size: 4 * maxMeshCount,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
 
 		this.offsetBuffer = device.createBuffer({
 			size: 16, // vec3<u32> + padding = 16 bytes
@@ -91,40 +48,6 @@ export class Mesh {
 			},
 		});
 
-		this.bindGroup = device.createBindGroup({
-			label: 'Mesh',
-			layout: this.pipeline.getBindGroupLayout(0),
-			entries: [
-				{
-					binding: 0,
-					resource: { buffer: noise.noiseBuffer }, // Input
-				},
-				{
-					binding: 1,
-					resource: { buffer: this.vertexCounts }, // Output
-				},
-				{
-					binding: 2,
-					resource: { buffer: this.vertices }, // Output
-				},
-				{
-					binding: 3,
-					resource: { buffer: this.normals }, // Output
-				},
-				{
-					binding: 4,
-					resource: { buffer: this.colors }, // Output
-				},
-				{
-					binding: 5,
-					resource: { buffer: this.commands }, // Output
-				},
-				{
-					binding: 6,
-					resource: { buffer: this.density }, // Output
-				},
-			],
-		});
 
 		this.contextBindGroup = device.createBindGroup({
 			label: 'Mesh Context',
@@ -132,26 +55,31 @@ export class Mesh {
 			entries: [
 				{
 					binding: 0,
-					resource: { buffer: contextUniform.uniformBuffer },
+					resource: {buffer: contextUniform.uniformBuffer},
 				},
 				{
 					binding: 1,
-					resource: { buffer: this.offsetBuffer },
+					resource: {buffer: this.offsetBuffer},
 				},
 				{
 					binding: 2,
-					resource: { buffer: this.edgeTableBuffer },
+					resource: {buffer: this.edgeTableBuffer},
 				},
 				{
 					binding: 3,
-					resource: { buffer: this.triangleTableBuffer },
+					resource: {buffer: this.triangleTableBuffer},
 				},
 			],
 		});
 	}
 
+	get renderTime(): number {
+		return this.timer.renderTime;
+	}
+
 	update(
 		encoder: GPUCommandEncoder,
+		chunk: Chunk,
 		bounds?: { min: [number, number, number]; max: [number, number, number] }
 	) {
 		if (bounds) {
@@ -181,7 +109,7 @@ export class Mesh {
 				timestampWrites: this.timer.getTimestampWrites(),
 			});
 			pass.setPipeline(this.pipeline);
-			pass.setBindGroup(0, this.bindGroup);
+			pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
 			pass.setBindGroup(1, this.contextBindGroup);
 
 			// Dispatch only the affected chunks with 4x4x4 workgroup size
@@ -200,7 +128,7 @@ export class Mesh {
 				timestampWrites: this.timer.getTimestampWrites(),
 			});
 			pass.setPipeline(this.pipeline);
-			pass.setBindGroup(0, this.bindGroup);
+			pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
 			pass.setBindGroup(1, this.contextBindGroup);
 
 			// Dispatch with 4x4x4 workgroup size for full grid
@@ -220,7 +148,47 @@ export class Mesh {
 		this.timer.readTimestamps();
 	}
 
-	get renderTime(): number {
-		return this.timer.renderTime;
+	registerChunk(chunk: Chunk) {
+
+		const bindGroup = device.createBindGroup({
+			label: 'Mesh',
+			layout: this.pipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: chunk.voxelData}, // Input
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunk.vertexCounts}, // Output
+				},
+				{
+					binding: 2,
+					resource: {buffer: chunk.vertices}, // Output
+				},
+				{
+					binding: 3,
+					resource: {buffer: chunk.normals}, // Output
+				},
+				{
+					binding: 4,
+					resource: {buffer: chunk.colors}, // Output
+				},
+				{
+					binding: 5,
+					resource: {buffer: chunk.commands}, // Output
+				},
+				{
+					binding: 6,
+					resource: {buffer: chunk.density}, // Output
+				},
+			],
+		});
+
+		this.chunkBindGroups.set(chunk, bindGroup);
+	}
+
+	unregisterChunk(chunk: Chunk) {
+		this.chunkBindGroups.delete(chunk);
 	}
 }

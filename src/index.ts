@@ -1,8 +1,8 @@
-import { GPUContext } from "./gpu";
-import { ContextUniform } from "./data/context";
-import { TimingDisplay } from "./ui/timing-display";
-import { FrameGraphManager } from "./ui/frame-graph-manager";
-import { Streaming } from "./chunk/streaming";
+import {GPUContext} from "./gpu";
+import {ContextUniform} from "./data/context";
+import {TimingDisplay} from "./ui/timing-display";
+import {FrameGraphManager} from "./ui/frame-graph-manager";
+import {Streaming} from "./chunk/streaming";
 
 export const gpu = new GPUContext();
 await gpu.init();
@@ -32,7 +32,7 @@ const streaming = new Streaming();
 const timingDisplay = new TimingDisplay();
 const frameGraphManager = new FrameGraphManager();
 
-async function runOneTimeSetup() {
+function runOneTimeSetup() {
 	gpu.update();
 
 	for (const uniform of uniforms) {
@@ -42,7 +42,7 @@ async function runOneTimeSetup() {
 	streaming.init();
 }
 
-await runOneTimeSetup();
+runOneTimeSetup();
 loop();
 
 // this has to be set after first render loop due to safari bug
