@@ -7,6 +7,7 @@ enable f16;
 @group(0) @binding(1) var<storage, read> vertexCounts: array<u32>;
 @group(0) @binding(3) var<storage, read> density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
+@group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
 
 // Output
 @group(0) @binding(0) var<storage, read_write> counter: atomic<u32>;
@@ -18,7 +19,9 @@ struct AABB {
 }
 
 fn get_block_aabb(block_pos: vec3<u32>) -> AABB {
-	let world_pos = vec3<f32>(block_pos) * COMPRESSION;
+	// Convert block position to world space by adding chunk offset
+	let local_pos = vec3<f32>(block_pos) * COMPRESSION;
+	let world_pos = local_pos + vec3<f32>(chunk_world_pos);
 	var aabb: AABB;
 	aabb.min = world_pos;
 	aabb.max = world_pos + vec3<f32>(COMPRESSION);
@@ -92,19 +95,21 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 			// Move one block toward camera
 			current_pos += ray_dir * step_size;
 
-			// Convert world position back to block coordinates
-			let test_block_pos_f = floor(current_pos / 8.0);
+			// Convert world position to chunk-local block coordinates
+			let world_block_pos_f = floor(current_pos / 8.0);
+			let chunk_block_offset = vec3<f32>(chunk_world_pos) / 8.0;
+			let local_block_pos_f = world_block_pos_f - chunk_block_offset;
 
 			// Check bounds before converting to unsigned
 			let grid_size = context.grid_size / COMPRESSION;
-			if (any(test_block_pos_f < vec3<f32>(0.0)) || any(test_block_pos_f >= vec3<f32>(f32(grid_size)))) {
+			if (any(local_block_pos_f < vec3<f32>(0.0)) || any(local_block_pos_f >= vec3<f32>(f32(grid_size)))) {
 				break;
 			}
 
-			let test_block_pos = vec3<u32>(test_block_pos_f);
+			let local_block_pos = vec3<u32>(local_block_pos_f);
 
 			// Get density value for this block
-			let block_index = to1DSmall(test_block_pos);
+			let block_index = to1DSmall(local_block_pos);
 			let block_density = density[block_index];
 
 			accumulated_density += block_density;

@@ -5,6 +5,7 @@ const FOG_START = 128.0;
 const FOG_END = 512.0;
 
 @group(0) @binding(0) var<uniform> context: Context;
+@group(0) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
 @group(1) @binding(0) var positionTexture: texture_2d<f32>;
 @group(1) @binding(1) var normalTexture: texture_2d<f32>;
 @group(1) @binding(2) var diffuseTexture: texture_2d<f32>;
@@ -83,9 +84,11 @@ fn calculate_ray_direction(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
     return normalize(world_pos_bg.xyz - camera_pos);
 }
 
-// Convert world position to compressed grid coordinates
+// Convert world position to chunk-local compressed grid coordinates
 fn worldToCompressedGrid(world_pos: vec3<f32>) -> vec3<f32> {
-    return world_pos / COMPRESSION;
+    // Subtract chunk world position to get chunk-local coordinates
+    let chunk_local_pos = world_pos - vec3<f32>(chunk_world_pos);
+    return chunk_local_pos / COMPRESSION;
 }
 
 // Sample light data from the compressed grid using trilinear interpolation
@@ -219,18 +222,39 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let camera_pos = context.inverse_view[3].xyz;
 
     if (has_geometry) {
-        // Render geometry with lighting
-        let normal_data = textureLoad(normalTexture, pixel_coord, 0);
-        let diffuse_data = textureLoad(diffuseTexture, pixel_coord, 0);
         let world_pos = position_data.xyz;
-        let distance = position_data.w;
-        let world_normal = normalize(normal_data.xyz);
-        let diffuse_color = diffuse_data.xyz;
 
-        let lit_color = calculate_lighting(world_pos, world_normal, diffuse_color, camera_pos, distance);
-        return vec4<f32>(lit_color, 1.0);
-    } else {
-        // Render background
-        return calculate_background_color(uv, camera_pos);
+        // Check if this pixel belongs to the current chunk
+        // Convert world position to chunk coordinates
+        let pixel_chunk_x = i32(floor(world_pos.x / f32(context.grid_size)));
+        let pixel_chunk_y = i32(floor(world_pos.y / f32(context.grid_size)));
+        let pixel_chunk_z = i32(floor(world_pos.z / f32(context.grid_size)));
+
+        let current_chunk_x = chunk_world_pos.x / i32(context.grid_size);
+        let current_chunk_y = chunk_world_pos.y / i32(context.grid_size);
+        let current_chunk_z = chunk_world_pos.z / i32(context.grid_size);
+
+        // Only render if pixel belongs to current chunk
+        if (pixel_chunk_x == current_chunk_x &&
+            pixel_chunk_y == current_chunk_y &&
+            pixel_chunk_z == current_chunk_z) {
+
+            // Render geometry with lighting
+            let normal_data = textureLoad(normalTexture, pixel_coord, 0);
+            let diffuse_data = textureLoad(diffuseTexture, pixel_coord, 0);
+            let distance = position_data.w;
+            let world_normal = normalize(normal_data.xyz);
+            let diffuse_color = diffuse_data.xyz;
+
+            let lit_color = calculate_lighting(world_pos, world_normal, diffuse_color, camera_pos, distance);
+            return vec4<f32>(lit_color, 1.0);
+        }
+
+        // Pixel belongs to a different chunk, will be rendered by that chunk's pass
+        // Return transparent to preserve previous pass results
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
+
+    // Render background
+    return calculate_background_color(uv, camera_pos);
 }

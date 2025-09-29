@@ -32,8 +32,9 @@ export class VoxelEditor {
 	// Voxel editing
 	private editPipeline: GPUComputePipeline;
 	private chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+	private chunkUniformBindGroups = new Map<Chunk, GPUBindGroup>();
+	private chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 	private activeChunk: Chunk | null = null;
-	private editUniformBindGroup: GPUBindGroup;
 	private editParamsBuffer: GPUBuffer;
 
 	// State
@@ -158,6 +159,41 @@ export class VoxelEditor {
 		});
 
 		this.chunkBindGroups.set(chunk, bindGroup);
+
+		// Create chunk world position buffer
+		const chunkWorldPosBuffer = device.createBuffer({
+			size: 16, // vec3<i32> + padding = 16 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk world position (in voxels)
+		const chunkWorldPosData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
+
+		// Create uniform bind group with chunk world position
+		const uniformBindGroup = device.createBindGroup({
+			label: 'Voxel Edit Context',
+			layout: this.editPipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer},
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunkWorldPosBuffer},
+				},
+			],
+		});
+
+		this.chunkUniformBindGroups.set(chunk, uniformBindGroup);
+		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+
 		if (!this.activeChunk) {
 			this.activeChunk = chunk;
 		}
@@ -226,16 +262,6 @@ export class VoxelEditor {
 		});
 
 
-		this.editUniformBindGroup = device.createBindGroup({
-			label: 'Voxel Edit Context',
-			layout: this.editPipeline.getBindGroupLayout(1),
-			entries: [
-				{
-					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
-				},
-			],
-		});
 	}
 
 	/**
@@ -334,7 +360,7 @@ export class VoxelEditor {
 
 		computePass.setPipeline(this.editPipeline);
 		computePass.setBindGroup(0, bindGroup);
-		computePass.setBindGroup(1, this.editUniformBindGroup);
+		computePass.setBindGroup(1, this.chunkUniformBindGroups.get(command.chunk)!);
 
 		// Dispatch to cover all voxels (could be optimized to only affect nearby voxels)
 		const workgroupsPerDim = Math.ceil(gridSize / 4);
@@ -408,12 +434,44 @@ export class VoxelEditor {
 			label: 'Async Mesh Regeneration',
 		});
 
-		// Update mesh generation with change bounds
-		this.mesh.update(encoder, chunk, this.changeBounds ?? undefined);
+		// Convert world-space bounds to chunk-local bounds
+		let localBounds: { min: [number, number, number]; max: [number, number, number] } | undefined;
+		if (this.changeBounds) {
+			const chunkWorldPos = [
+				chunk.position[0] * gridSize,
+				chunk.position[1] * gridSize,
+				chunk.position[2] * gridSize
+			];
+
+			// Convert world-space to chunk-local coordinates
+			localBounds = {
+				min: [
+					Math.max(0, this.changeBounds.min[0] - chunkWorldPos[0]),
+					Math.max(0, this.changeBounds.min[1] - chunkWorldPos[1]),
+					Math.max(0, this.changeBounds.min[2] - chunkWorldPos[2])
+				],
+				max: [
+					Math.min(gridSize - 1, this.changeBounds.max[0] - chunkWorldPos[0]),
+					Math.min(gridSize - 1, this.changeBounds.max[1] - chunkWorldPos[1]),
+					Math.min(gridSize - 1, this.changeBounds.max[2] - chunkWorldPos[2])
+				]
+			};
+
+			// Validate bounds - if invalid, regenerate entire chunk
+			if (localBounds.min[0] > localBounds.max[0] ||
+				localBounds.min[1] > localBounds.max[1] ||
+				localBounds.min[2] > localBounds.max[2]) {
+				console.log('Invalid local bounds, regenerating entire chunk');
+				localBounds = undefined;
+			}
+		}
+
+		// Update mesh generation with chunk-local bounds
+		this.mesh.update(encoder, chunk, localBounds);
 
 		device.queue.submit([encoder.finish()]);
 
 		// Invalidate lighting after voxel changes
-		this.light.invalidate();
+		this.light.invalidate(chunk);
 	}
 }

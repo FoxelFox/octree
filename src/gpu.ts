@@ -45,7 +45,7 @@ export class GPUContext {
 		};
 		this.keys = new Set();
 		this.camera = {
-			position: [32, 280, 0],
+			position: [32, 240, 0],
 			yaw: 0.7,
 			pitch: -0.2,
 			speed: 16,

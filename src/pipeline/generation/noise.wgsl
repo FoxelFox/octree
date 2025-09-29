@@ -13,10 +13,13 @@ struct VoxelData {
 
 // output
 @group(0) @binding(0) var<storage, read_write> voxels: array<VoxelData>;
+@group(0) @binding(1) var<uniform> chunk_offset: vec3<i32>;
 
 // Generate continuous SDF values instead of binary 0/1
 fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
-    let pos_f = vec3<f32>(pos);
+    // Convert to world-space coordinates by adding chunk offset
+    let world_pos = vec3<f32>(pos) + vec3<f32>(chunk_offset);
+    let pos_f = world_pos;
 
     // Generate rocky surface base using fractal noise
     let surface_noise = rock_voronoi3(pos_f / 80.0, 2, 10);
@@ -82,7 +85,9 @@ fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
 
 // Generate candy-colored voxels
 fn generate_color(pos: vec3<u32>, density: f32) -> u32 {
-    let pos_f = vec3<f32>(pos);
+    // Convert to world-space coordinates
+    let world_pos = vec3<f32>(pos) + vec3<f32>(chunk_offset);
+    let pos_f = world_pos;
 
     // Use multiple noise sources to create different candy zones
     let color_noise1 = rock_voronoi3(pos_f / 1000.0, 1, 2);

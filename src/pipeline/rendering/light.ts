@@ -8,15 +8,16 @@ export class Light {
 	// Compute pipeline for light propagation
 	pipeline: GPUComputePipeline;
 	bindGroups = new Map<Chunk, GPUBindGroup>();
-	contextBindGroup: GPUBindGroup;
+	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 	// Configuration uniforms
 	configBuffer: GPUBuffer;
 	// Timer for profiling
 	timer: RenderTimer;
-	// Simulation state
-	private iterationCount = 0;
+	// Per-chunk simulation state
+	private chunkIterationCounts = new Map<Chunk, number>();
+	private chunkNeedsUpdate = new Map<Chunk, boolean>();
 	private maxIterations = 16; // Number of iterations to propagate light
-	private needsUpdate = true;
 
 	constructor() {
 		this.timer = new RenderTimer("light");
@@ -34,16 +35,6 @@ export class Light {
 			},
 		});
 
-		this.contextBindGroup = device.createBindGroup({
-			label: "Light Context",
-			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [
-				{
-					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
-				},
-			],
-		});
 	}
 
 	get renderTime(): number {
@@ -51,7 +42,8 @@ export class Light {
 	}
 
 	update(encoder: GPUCommandEncoder, chunk: Chunk) {
-		if (!this.needsUpdate) return;
+		const needsUpdate = this.chunkNeedsUpdate.get(chunk) ?? false;
+		if (!needsUpdate) return;
 
 		const bindGroup = this.bindGroups.get(chunk);
 		if (!bindGroup) return;
@@ -74,7 +66,7 @@ export class Light {
 
 			pass.setPipeline(this.pipeline);
 			pass.setBindGroup(0, bindGroup);
-			pass.setBindGroup(1, this.contextBindGroup);
+			pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
 			// Dispatch with 4x4x4 workgroup size to match mesh generation
 			const sSize = gridSize / compression;
@@ -96,19 +88,27 @@ export class Light {
 		this.swapBuffers(chunk);
 		this.bindGroups.set(chunk, this.createComputeBindGroup(chunk));
 
-		this.iterationCount++;
+		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
+		this.chunkIterationCounts.set(chunk, iterationCount);
+
 		// Stop updating after the light has stabilized
-		if (this.iterationCount >= this.maxIterations * 2) {
-			this.needsUpdate = false;
+		if (iterationCount >= this.maxIterations * 2) {
+			this.chunkNeedsUpdate.set(chunk, false);
 		}
 	}
 
 	// Force a light update (call when voxels are modified)
-	invalidate() {
-		this.needsUpdate = true;
-		this.iterationCount = 0;
-		// No need to reset lighting - the double buffering will naturally
-		// recalculate lighting from the current state without flicker
+	invalidate(chunk?: Chunk) {
+		if (chunk) {
+			this.chunkNeedsUpdate.set(chunk, true);
+			this.chunkIterationCounts.set(chunk, 0);
+		} else {
+			// Invalidate all chunks
+			for (const c of this.chunkNeedsUpdate.keys()) {
+				this.chunkNeedsUpdate.set(c, true);
+				this.chunkIterationCounts.set(c, 0);
+			}
+		}
 	}
 
 	afterUpdate() {
@@ -120,10 +120,56 @@ export class Light {
 		this.initializeLighting(chunk);
 
 		this.bindGroups.set(chunk, this.createComputeBindGroup(chunk));
+
+		// Mark chunk as needing light updates
+		this.chunkNeedsUpdate.set(chunk, true);
+		this.chunkIterationCounts.set(chunk, 0);
+
+		// Create chunk world position buffer
+		const chunkWorldPosBuffer = device.createBuffer({
+			size: 16, // vec3<i32> + padding = 16 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk world position (in voxels)
+		const chunkWorldPosData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
+
+		// Create context bind group with chunk world position
+		const contextBindGroup = device.createBindGroup({
+			label: "Light Context",
+			layout: this.pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer},
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunkWorldPosBuffer},
+				},
+			],
+		});
+
+		this.chunkContextBindGroups.set(chunk, contextBindGroup);
+		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
 	}
 
 	unregisterChunk(chunk: Chunk) {
+		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
+		if (worldPosBuffer) {
+			worldPosBuffer.destroy();
+		}
 		this.bindGroups.delete(chunk);
+		this.chunkContextBindGroups.delete(chunk);
+		this.chunkWorldPosBuffers.delete(chunk);
+		this.chunkNeedsUpdate.delete(chunk);
+		this.chunkIterationCounts.delete(chunk);
 	}
 
 	private initBuffers() {
@@ -156,17 +202,25 @@ export class Light {
 		const totalCells = sSize * sSize * sSize;
 		const initData = new Float32Array(totalCells * 2); // RG format
 
-		// Fill with initial skylight values - but be more conservative
+		// Calculate world Y position of this chunk
+		const chunkWorldY = chunk.position[1] * gridSize;
+
+		// Fill with initial skylight values - based on world position
 		for (let z = 0; z < sSize; z++) {
 			for (let y = 0; y < sSize; y++) {
 				for (let x = 0; x < sSize; x++) {
 					const index = (z * sSize * sSize + y * sSize + x) * 2;
 
-					// Only add skylight to the very top layer, everything else starts dark
-					const skylight = (y >= sSize - 1) ? 1.0 : 0.0;
+					// Calculate world Y for this cell
+					const worldY = chunkWorldY + y * compression;
+
+					// Add skylight to top layer if in upper chunks (world Y > 0)
+					const isTopLayer = (y >= sSize - 1);
+					const isUpperChunk = worldY > 0;
+					const skylight = (isTopLayer && isUpperChunk) ? Math.min(worldY / 256.0, 1.0) : 0.0;
 
 					initData[index] = skylight;     // R: light intensity
-					initData[index + 1] = (y >= sSize - 1) ? 0.0 : 1.0;      // G: shadow factor
+					initData[index + 1] = isTopLayer ? 0.0 : 1.0;      // G: shadow factor
 				}
 			}
 		}

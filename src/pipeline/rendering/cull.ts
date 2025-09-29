@@ -4,51 +4,26 @@ import {RenderTimer} from "../timing";
 import {Chunk} from "../../chunk/chunk";
 
 export class Cull {
-	counter: GPUBuffer;
-	counterReadback: GPUBuffer;
-	contextBindGroup: GPUBindGroup;
 	pipeline: GPUComputePipeline;
-	indicesBuffer: GPUBuffer;
-	indicesReadback: GPUBuffer;
+
+	// Per-chunk buffers
+	chunkCounters = new Map<Chunk, GPUBuffer>();
+	chunkCounterReadbacks = new Map<Chunk, GPUBuffer>();
+	chunkIndicesBuffers = new Map<Chunk, GPUBuffer>();
+	chunkIndicesReadbacks = new Map<Chunk, GPUBuffer>();
 
 	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 
 	// output
 	count: number = 0;
 	timer: RenderTimer;
-	private readbackInProgress = false;
-	private framesSinceUpdate = 0;
+	private readbackInProgress = new Map<Chunk, boolean>();
+	private framesSinceUpdate = new Map<Chunk, number>();
 
 	constructor() {
 		this.timer = new RenderTimer("cull");
-
-		this.counter = device.createBuffer({
-			size: 4,
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_SRC |
-				GPUBufferUsage.COPY_DST,
-		});
-
-		this.counterReadback = device.createBuffer({
-			size: this.counter.size,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-		});
-
-		this.indicesBuffer = device.createBuffer({
-			size: Math.pow(gridSize / compression, 3) * 4,
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_SRC |
-				GPUBufferUsage.COPY_DST,
-		});
-
-		this.indicesReadback = device.createBuffer({
-			size: this.indicesBuffer.size,
-			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-		});
-
-		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
 
 		this.pipeline = device.createComputePipeline({
 			layout: "auto",
@@ -60,18 +35,6 @@ export class Cull {
 				entryPoint: "main",
 			},
 		});
-
-
-		this.contextBindGroup = device.createBindGroup({
-			label: "Cull Context",
-			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [
-				{
-					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
-				},
-			],
-		});
 	}
 
 	get renderTime(): number {
@@ -79,15 +42,18 @@ export class Cull {
 	}
 
 	update(encoder: GPUCommandEncoder, chunk: Chunk) {
+		const counter = this.chunkCounters.get(chunk);
+		if (!counter) return;
+
 		// Reset counter before culling
-		device.queue.writeBuffer(this.counter, 0, new Uint32Array([0]));
+		device.queue.writeBuffer(counter, 0, new Uint32Array([0]));
 
 		const pass = encoder.beginComputePass({
 			timestampWrites: this.timer.getTimestampWrites(),
 		});
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
-		pass.setBindGroup(1, this.contextBindGroup);
+		pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
 		// Dispatch with 4x4x4 workgroup size
 		const workgroupsPerDim = Math.ceil(gridSize / compression / 4);
@@ -101,11 +67,13 @@ export class Cull {
 		this.timer.resolveTimestamps(encoder);
 
 		// Start async readback if not already in progress
-		this.framesSinceUpdate++;
-		if (!this.readbackInProgress && this.framesSinceUpdate >= 2) {
+		const frames = (this.framesSinceUpdate.get(chunk) ?? 0) + 1;
+		this.framesSinceUpdate.set(chunk, frames);
+		const inProgress = this.readbackInProgress.get(chunk) ?? false;
+		if (!inProgress && frames >= 2) {
 			// Update every 2 frames
 			this.startAsyncReadback(chunk);
-			this.framesSinceUpdate = 0;
+			this.framesSinceUpdate.set(chunk, 0);
 		}
 	}
 
@@ -115,13 +83,50 @@ export class Cull {
 	}
 
 	registerChunk(chunk: Chunk) {
+		// Create per-chunk counter buffer
+		const counter = device.createBuffer({
+			size: 4,
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.COPY_DST,
+		});
+
+		const counterReadback = device.createBuffer({
+			size: 4,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+
+		// Create per-chunk indices buffer
+		const indicesBuffer = device.createBuffer({
+			size: Math.pow(gridSize / compression, 3) * 4,
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.COPY_DST,
+		});
+
+		const indicesReadback = device.createBuffer({
+			size: Math.pow(gridSize / compression, 3) * 4,
+			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+		});
+
+		device.queue.writeBuffer(counter, 0, new Uint32Array([0]));
+
+		// Store per-chunk buffers
+		this.chunkCounters.set(chunk, counter);
+		this.chunkCounterReadbacks.set(chunk, counterReadback);
+		this.chunkIndicesBuffers.set(chunk, indicesBuffer);
+		this.chunkIndicesReadbacks.set(chunk, indicesReadback);
+
+		// Create bind group with per-chunk buffers
 		const bindGroup = device.createBindGroup({
 			layout: this.pipeline.getBindGroupLayout(0),
 			label: "Cull",
 			entries: [
 				{
 					binding: 0,
-					resource: this.counter,
+					resource: counter,
 				},
 				{
 					binding: 1,
@@ -129,7 +134,7 @@ export class Cull {
 				},
 				{
 					binding: 2,
-					resource: this.indicesBuffer,
+					resource: indicesBuffer,
 				},
 				{
 					binding: 3,
@@ -138,63 +143,132 @@ export class Cull {
 			],
 		});
 
+		// Create chunk world position buffer
+		const chunkWorldPosBuffer = device.createBuffer({
+			size: 16, // vec3<i32> + padding = 16 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk world position (in voxels)
+		const chunkWorldPosData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
+
+		// Create context bind group with chunk world position
+		const contextBindGroup = device.createBindGroup({
+			label: "Cull Context",
+			layout: this.pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer},
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunkWorldPosBuffer},
+				},
+			],
+		});
+
 		this.chunkBindGroups.set(chunk, bindGroup);
+		this.chunkContextBindGroups.set(chunk, contextBindGroup);
+		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+
+		// Initialize per-chunk state
+		this.readbackInProgress.set(chunk, false);
+		this.framesSinceUpdate.set(chunk, 0);
 	}
 
 	unregisterChunk(chunk: Chunk) {
+		// Destroy per-chunk buffers
+		const counter = this.chunkCounters.get(chunk);
+		const counterReadback = this.chunkCounterReadbacks.get(chunk);
+		const indicesBuffer = this.chunkIndicesBuffers.get(chunk);
+		const indicesReadback = this.chunkIndicesReadbacks.get(chunk);
+		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
+
+		counter?.destroy();
+		counterReadback?.destroy();
+		indicesBuffer?.destroy();
+		indicesReadback?.destroy();
+		worldPosBuffer?.destroy();
+
+		// Clean up maps
+		this.chunkCounters.delete(chunk);
+		this.chunkCounterReadbacks.delete(chunk);
+		this.chunkIndicesBuffers.delete(chunk);
+		this.chunkIndicesReadbacks.delete(chunk);
 		this.chunkBindGroups.delete(chunk);
+		this.chunkContextBindGroups.delete(chunk);
+		this.chunkWorldPosBuffers.delete(chunk);
+		this.readbackInProgress.delete(chunk);
+		this.framesSinceUpdate.delete(chunk);
 	}
 
 	private startAsyncReadback(chunk: Chunk) {
-		if (this.readbackInProgress) return;
+		const inProgress = this.readbackInProgress.get(chunk) ?? false;
+		if (inProgress) return;
 
-		this.readbackInProgress = true;
+		this.readbackInProgress.set(chunk, true);
 
 		// Start async readback without blocking
 		this.performAsyncReadback(chunk)
 			.then(() => {
-				this.readbackInProgress = false;
+				this.readbackInProgress.set(chunk, false);
 			})
 			.catch((error) => {
 				console.warn("Culling readback failed:", error);
-				this.readbackInProgress = false;
+				this.readbackInProgress.set(chunk, false);
 			});
 	}
 
 	private async performAsyncReadback(chunk: Chunk): Promise<void> {
+		const counter = this.chunkCounters.get(chunk);
+		const counterReadback = this.chunkCounterReadbacks.get(chunk);
+		const indicesBuffer = this.chunkIndicesBuffers.get(chunk);
+		const indicesReadback = this.chunkIndicesReadbacks.get(chunk);
+
+		if (!counter || !counterReadback || !indicesBuffer || !indicesReadback) {
+			return;
+		}
+
 		// Wait a frame to ensure GPU work is submitted
 		await new Promise((resolve) => requestAnimationFrame(resolve));
 
 		// Atomically copy both counter and indices in the same submission
 		const encoder = device.createCommandEncoder();
 		encoder.copyBufferToBuffer(
-			this.counter,
+			counter,
 			0,
-			this.counterReadback,
+			counterReadback,
 			0,
-			this.counter.size,
+			counter.size,
 		);
 		encoder.copyBufferToBuffer(
-			this.indicesBuffer,
+			indicesBuffer,
 			0,
-			this.indicesReadback,
+			indicesReadback,
 			0,
-			this.indicesBuffer.size,
+			indicesBuffer.size,
 		);
 		device.queue.submit([encoder.finish()]);
 
 		// Read counter first
-		await this.counterReadback.mapAsync(GPUMapMode.READ);
-		const counterData = this.counterReadback.getMappedRange();
+		await counterReadback.mapAsync(GPUMapMode.READ);
+		const counterData = counterReadback.getMappedRange();
 		const newCount = new Uint32Array(counterData)[0];
-		this.counterReadback.unmap();
+		counterReadback.unmap();
 
 		// Read indices using the count that was valid when buffers were copied
-		await this.indicesReadback.mapAsync(GPUMapMode.READ);
-		const indicesData = this.indicesReadback.getMappedRange();
-		const readSize = Math.min(newCount * 4, this.indicesBuffer.size);
+		await indicesReadback.mapAsync(GPUMapMode.READ);
+		const indicesData = indicesReadback.getMappedRange();
+		const readSize = Math.min(newCount * 4, indicesBuffer.size);
 		chunk.indices = new Uint32Array(indicesData.slice(0, readSize));
-		this.indicesReadback.unmap();
+		indicesReadback.unmap();
 
 		// Update count last, after we've used the consistent value
 		this.count = newCount;

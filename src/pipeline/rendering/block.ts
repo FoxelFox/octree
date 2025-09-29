@@ -15,9 +15,10 @@ export class Block {
 	// Deferred lighting pass
 	deferredPipeline: GPURenderPipeline;
 	deferredBindGroup: GPUBindGroup;
-	deferredUniformBindGroup: GPUBindGroup;
+	deferredUniformBindGroups = new Map<Chunk, GPUBindGroup>();
 	deferredSpaceBindGroup: GPUBindGroup;
 	deferredLightBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 	private lightBufferRefs = new Map<Chunk, GPUBuffer>();
 
 	// Space background
@@ -103,7 +104,21 @@ export class Block {
 					code: deferredShader,
 				}),
 				targets: [
-					{format: "bgra8unorm"}, // Canvas only
+					{
+						format: "bgra8unorm",
+						blend: {
+							color: {
+								srcFactor: "src-alpha",
+								dstFactor: "one-minus-src-alpha",
+								operation: "add",
+							},
+							alpha: {
+								srcFactor: "one",
+								dstFactor: "one-minus-src-alpha",
+								operation: "add",
+							},
+						},
+					},
 				],
 			},
 			vertex: {
@@ -121,13 +136,6 @@ export class Block {
 		this.gBufferUniformBindGroup = device.createBindGroup({
 			label: "Block G-Buffer Context",
 			layout: this.gBufferPipeline.getBindGroupLayout(1),
-			entries: [{binding: 0, resource: contextUniform.uniformBuffer}],
-		});
-
-		// Create deferred bind groups
-		this.deferredUniformBindGroup = device.createBindGroup({
-			label: "Deferred Context",
-			layout: this.deferredPipeline.getBindGroupLayout(0),
 			entries: [{binding: 0, resource: contextUniform.uniformBuffer}],
 		});
 
@@ -214,7 +222,7 @@ export class Block {
 		this.initialized = true;
 	}
 
-	update(commandEncoder: GPUCommandEncoder, chunk: Chunk) {
+	update(commandEncoder: GPUCommandEncoder, chunks: Chunk[]) {
 		if (!this.initialized) {
 			// Generate space background texture once after initialization
 			this.generateSpaceBackground(commandEncoder);
@@ -230,9 +238,12 @@ export class Block {
 			this.createDeferredBindGroup();
 		}
 
-		this.updateDeferredLightBindGroup(chunk);
+		// Update deferred light bind groups for all chunks
+		for (const chunk of chunks) {
+			this.updateDeferredLightBindGroup(chunk);
+		}
 
-		// Pass 1: G-buffer generation
+		// Pass 1: G-buffer generation for all chunks
 		const gBufferPass = commandEncoder.beginRenderPass({
 			label: "Block G-Buffer",
 			colorAttachments: [
@@ -265,18 +276,22 @@ export class Block {
 		});
 
 		gBufferPass.setPipeline(this.gBufferPipeline);
-		gBufferPass.setBindGroup(0, this.gBufferBindGroups.get(chunk));
-		gBufferPass.setBindGroup(1, this.gBufferUniformBindGroup);
 
-		// Draw instances for each mesh chunk (only if culling data is ready)
-		if (chunk.indices && chunk.indices.length > 0) {
-			const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
-			for (let i = 0; i < chunk.indices.length; ++i) {
-				const meshIndex = chunk.indices[i];
-				if (typeof meshIndex === 'number' && isFinite(meshIndex) && meshIndex <= maxMeshIndex) {
-					gBufferPass.drawIndirect(chunk.commands, meshIndex * 16);
-				} else if (meshIndex > maxMeshIndex) {
-					console.warn(`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`);
+		// Render all chunks into G-buffer
+		for (const chunk of chunks) {
+			gBufferPass.setBindGroup(0, this.gBufferBindGroups.get(chunk));
+			gBufferPass.setBindGroup(1, this.gBufferUniformBindGroup);
+
+			// Draw instances for each mesh chunk (only if culling data is ready)
+			if (chunk.indices && chunk.indices.length > 0) {
+				const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
+				for (let i = 0; i < chunk.indices.length; ++i) {
+					const meshIndex = chunk.indices[i];
+					if (typeof meshIndex === 'number' && isFinite(meshIndex) && meshIndex <= maxMeshIndex) {
+						gBufferPass.drawIndirect(chunk.commands, meshIndex * 16);
+					} else if (meshIndex > maxMeshIndex) {
+						console.warn(`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`);
+					}
 				}
 			}
 		}
@@ -284,27 +299,32 @@ export class Block {
 		gBufferPass.end();
 
 		// Pass 2: Deferred lighting with background
-		const deferredPass = commandEncoder.beginRenderPass({
-			label: "Block Deferred Lighting",
-			colorAttachments: [
-				{
-					view: context.getCurrentTexture().createView(),
-					loadOp: "clear",
-					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
-				},
-			],
-		});
+		// We need to do this for each chunk because each chunk has different light data
+		// Use "load" after the first chunk to preserve previous results
+		let isFirstChunk = true;
+		for (const chunk of chunks) {
+			const deferredPass = commandEncoder.beginRenderPass({
+				label: `Block Deferred Lighting - Chunk ${chunk.id}`,
+				colorAttachments: [
+					{
+						view: context.getCurrentTexture().createView(),
+						loadOp: isFirstChunk ? "clear" : "load",
+						storeOp: "store",
+						clearValue: {r: 0, g: 0, b: 0, a: 0},
+					},
+				],
+			});
 
-		deferredPass.setPipeline(this.deferredPipeline);
-		deferredPass.setBindGroup(0, this.deferredUniformBindGroup);
-		deferredPass.setBindGroup(1, this.deferredBindGroup);
-		deferredPass.setBindGroup(2, this.deferredSpaceBindGroup);
-		const deferredLightBindGroup = this.deferredLightBindGroups.get(chunk)!;
-		deferredPass.setBindGroup(3, deferredLightBindGroup);
-		deferredPass.draw(6); // Full-screen quad
+			deferredPass.setPipeline(this.deferredPipeline);
+			deferredPass.setBindGroup(0, this.deferredUniformBindGroups.get(chunk)!);
+			deferredPass.setBindGroup(1, this.deferredBindGroup);
+			deferredPass.setBindGroup(2, this.deferredSpaceBindGroup);
+			deferredPass.setBindGroup(3, this.deferredLightBindGroups.get(chunk)!);
+			deferredPass.draw(6); // Full-screen quad
 
-		deferredPass.end();
+			deferredPass.end();
+			isFirstChunk = false;
+		}
 
 		this.timer.resolveTimestamps(commandEncoder);
 	}
@@ -340,6 +360,34 @@ export class Block {
 		});
 
 		this.gBufferBindGroups.set(chunk, gBufferBindGroup);
+
+		// Create chunk world position buffer
+		const chunkWorldPosBuffer = device.createBuffer({
+			size: 16, // vec3<i32> + padding = 16 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk world position (in voxels)
+		const chunkWorldPosData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
+
+		// Create deferred uniform bind group with chunk world position
+		const deferredUniformBindGroup = device.createBindGroup({
+			label: "Deferred Context",
+			layout: this.deferredPipeline.getBindGroupLayout(0),
+			entries: [
+				{binding: 0, resource: contextUniform.uniformBuffer},
+				{binding: 1, resource: {buffer: chunkWorldPosBuffer}}
+			],
+		});
+
+		this.deferredUniformBindGroups.set(chunk, deferredUniformBindGroup);
+		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
 		this.updateDeferredLightBindGroup(chunk);
 	}
 

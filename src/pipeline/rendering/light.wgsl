@@ -20,6 +20,7 @@ struct LightConfig {
 
 // Context data
 @group(1) @binding(0) var<uniform> context: Context;
+@group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
 
 // Use the to1DSmall function from context.wgsl
 
@@ -124,10 +125,10 @@ fn calculateLightPropagation(pos: vec3<i32>) -> vec2<f32> {
         }
     }
     
-    // Only add skylight if there's a clear path to the surface
+    // Calculate world Y position for skylight
     let size = f32(context.grid_size / COMPRESSION);
-    let height_factor = f32(pos.y) / (size - 1.0);
-    
+    let world_y = f32(pos.y) * COMPRESSION + f32(chunk_world_pos.y);
+
     // Check if there's a clear vertical path to the surface for skylight
     var has_sky_access = true;
     for (var check_y = pos.y + 1; check_y < i32(size); check_y++) {
@@ -137,10 +138,13 @@ fn calculateLightPropagation(pos: vec3<i32>) -> vec2<f32> {
             break;
         }
     }
-    
-    // Only apply skylight if there's direct access to sky
-    if (has_sky_access) {
-        let skylight = config.skylight_intensity * height_factor * height_factor;
+
+    // Only apply skylight if there's direct access to sky and above certain height
+    // Skylight intensity based on world Y position (brighter near world top)
+    if (has_sky_access && world_y > 0.0) {
+        // More generous skylight - max at world Y > 256
+        let skylight_factor = clamp(world_y / 256.0, 0.0, 1.0);
+        let skylight = config.skylight_intensity * skylight_factor;
         max_light = max(max_light, skylight);
     }
     

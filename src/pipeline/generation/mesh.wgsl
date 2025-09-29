@@ -20,6 +20,7 @@ struct VoxelData {
 @group(0) @binding(0) var<storage, read> voxels: array<VoxelData>;
 @group(1) @binding(0) var<uniform> context: Context;
 @group(1) @binding(1) var<uniform> offset: vec3<u32>;
+@group(1) @binding(4) var<uniform> chunk_world_pos: vec3<i32>;
 
 // Output
 @group(0) @binding(1) var<storage, read_write> vertexCounts: array<u32>;
@@ -302,9 +303,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						let c2 = colorList[edge2];
 						let c3 = colorList[edge3];
 
-						vertices[baseVertexIndex] = vec4<f16>(vec3<f16>(v1), 1.0h);
-						vertices[baseVertexIndex + 1] = vec4<f16>(vec3<f16>(v2), 1.0h);
-						vertices[baseVertexIndex + 2] = vec4<f16>(vec3<f16>(v3), 1.0h);
+						// Apply chunk world position offset to vertices
+						let v1_world = v1 + vec3<f32>(chunk_world_pos);
+						let v2_world = v2 + vec3<f32>(chunk_world_pos);
+						let v3_world = v3 + vec3<f32>(chunk_world_pos);
+
+						vertices[baseVertexIndex] = vec4<f16>(vec3<f16>(v1_world), 1.0h);
+						vertices[baseVertexIndex + 1] = vec4<f16>(vec3<f16>(v2_world), 1.0h);
+						vertices[baseVertexIndex + 2] = vec4<f16>(vec3<f16>(v3_world), 1.0h);
 
 						normals[baseVertexIndex] = vec3<f16>(n1);
 						normals[baseVertexIndex + 1] = vec3<f16>(n2);

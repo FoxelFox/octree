@@ -6,13 +6,14 @@ import {Chunk} from "../../chunk/chunk";
 
 export class Mesh {
 	pipeline: GPUComputePipeline;
-	contextBindGroup: GPUBindGroup;
 	offsetBuffer: GPUBuffer;
 	edgeTableBuffer: GPUBuffer;
 	triangleTableBuffer: GPUBuffer;
 	timer: RenderTimer;
 
 	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
+	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 
 	constructor() {
 		this.timer = new RenderTimer('mesh');
@@ -49,28 +50,6 @@ export class Mesh {
 		});
 
 
-		this.contextBindGroup = device.createBindGroup({
-			label: 'Mesh Context',
-			layout: this.pipeline.getBindGroupLayout(1),
-			entries: [
-				{
-					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
-				},
-				{
-					binding: 1,
-					resource: {buffer: this.offsetBuffer},
-				},
-				{
-					binding: 2,
-					resource: {buffer: this.edgeTableBuffer},
-				},
-				{
-					binding: 3,
-					resource: {buffer: this.triangleTableBuffer},
-				},
-			],
-		});
 	}
 
 	get renderTime(): number {
@@ -110,7 +89,7 @@ export class Mesh {
 			});
 			pass.setPipeline(this.pipeline);
 			pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
-			pass.setBindGroup(1, this.contextBindGroup);
+			pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
 			// Dispatch only the affected chunks with 4x4x4 workgroup size
 			const workgroupsX = Math.ceil((maxChunk[0] - minChunk[0] + 1) / 4);
@@ -129,7 +108,7 @@ export class Mesh {
 			});
 			pass.setPipeline(this.pipeline);
 			pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
-			pass.setBindGroup(1, this.contextBindGroup);
+			pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
 			// Dispatch with 4x4x4 workgroup size for full grid
 			const workgroupsPerDim = Math.ceil(gridSize / compression / 4);
@@ -185,10 +164,61 @@ export class Mesh {
 			],
 		});
 
+		// Create chunk world position buffer
+		const chunkWorldPosBuffer = device.createBuffer({
+			size: 16, // vec3<i32> + padding = 16 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk world position (in voxels)
+		const chunkWorldPosData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
+
+		// Create context bind group with chunk world position
+		const contextBindGroup = device.createBindGroup({
+			label: 'Mesh Context',
+			layout: this.pipeline.getBindGroupLayout(1),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer},
+				},
+				{
+					binding: 1,
+					resource: {buffer: this.offsetBuffer},
+				},
+				{
+					binding: 2,
+					resource: {buffer: this.edgeTableBuffer},
+				},
+				{
+					binding: 3,
+					resource: {buffer: this.triangleTableBuffer},
+				},
+				{
+					binding: 4,
+					resource: {buffer: chunkWorldPosBuffer},
+				},
+			],
+		});
+
 		this.chunkBindGroups.set(chunk, bindGroup);
+		this.chunkContextBindGroups.set(chunk, contextBindGroup);
+		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
 	}
 
 	unregisterChunk(chunk: Chunk) {
+		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
+		if (worldPosBuffer) {
+			worldPosBuffer.destroy();
+		}
 		this.chunkBindGroups.delete(chunk);
+		this.chunkContextBindGroups.delete(chunk);
+		this.chunkWorldPosBuffers.delete(chunk);
 	}
 }
