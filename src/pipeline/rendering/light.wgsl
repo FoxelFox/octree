@@ -12,11 +12,19 @@ struct LightConfig {
 // Input: mesh density data
 @group(0) @binding(0) var<storage, read> density: array<u32>;
 
-// Output: light data (RG format - R=light intensity, G=shadow factor)  
+// Output: light data (RG format - R=light intensity, G=shadow factor)
 @group(0) @binding(1) var<storage, read_write> light_data: array<vec2<f32>>;
 
 // Configuration
 @group(0) @binding(2) var<uniform> config: LightConfig;
+
+// Neighbor light buffers (6 directions: -X, +X, -Y, +Y, -Z, +Z)
+@group(0) @binding(3) var<storage, read> neighbor_light_nx: array<vec2<f32>>; // -X neighbor
+@group(0) @binding(4) var<storage, read> neighbor_light_px: array<vec2<f32>>; // +X neighbor
+@group(0) @binding(5) var<storage, read> neighbor_light_ny: array<vec2<f32>>; // -Y neighbor
+@group(0) @binding(6) var<storage, read> neighbor_light_py: array<vec2<f32>>; // +Y neighbor
+@group(0) @binding(7) var<storage, read> neighbor_light_nz: array<vec2<f32>>; // -Z neighbor
+@group(0) @binding(8) var<storage, read> neighbor_light_pz: array<vec2<f32>>; // +Z neighbor
 
 // Context data
 @group(1) @binding(0) var<uniform> context: Context;
@@ -40,11 +48,62 @@ fn getDensity(pos: vec3<i32>) -> f32 {
     return f32(density[index]) / (COMPRESSION * COMPRESSION * COMPRESSION);
 }
 
-// Get light data at position
+// Get light data at position, including from neighbor chunks
 fn getLightData(pos: vec3<i32>) -> vec2<f32> {
-    if (!isInBounds(pos)) {
-        return vec2<f32>(0.0, 1.0); // No light, full shadow outside bounds
+    let size = i32(context.grid_size / COMPRESSION);
+
+    // Check if we need to sample from a neighbor chunk
+    if (pos.x < 0) {
+        // Sample from -X neighbor at their rightmost edge
+        let neighbor_pos = vec3<i32>(size - 1, pos.y, pos.z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_nx[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (pos.x >= size) {
+        // Sample from +X neighbor at their leftmost edge
+        let neighbor_pos = vec3<i32>(0, pos.y, pos.z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_px[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (pos.y < 0) {
+        // Sample from -Y neighbor
+        let neighbor_pos = vec3<i32>(pos.x, size - 1, pos.z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_ny[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (pos.y >= size) {
+        // Sample from +Y neighbor
+        let neighbor_pos = vec3<i32>(pos.x, 0, pos.z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_py[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (pos.z < 0) {
+        // Sample from -Z neighbor
+        let neighbor_pos = vec3<i32>(pos.x, pos.y, size - 1);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_nz[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (pos.z >= size) {
+        // Sample from +Z neighbor
+        let neighbor_pos = vec3<i32>(pos.x, pos.y, 0);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
+            let index = to1DSmall(vec3<u32>(neighbor_pos));
+            return neighbor_light_pz[index];
+        }
+        return vec2<f32>(0.0, 1.0);
     }
+
+    // Sample from current chunk
     let index = to1DSmall(vec3<u32>(pos));
     return light_data[index];
 }

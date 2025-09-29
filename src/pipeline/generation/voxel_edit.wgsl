@@ -51,14 +51,21 @@ fn smax(a: f32, b: f32, k: f32) -> f32 {
 //const NEON_PINK_COLOR: u32 = 0xFF3185FF; // RGB(255,0,153) in ABGR format
 const NEON_PINK_COLOR: u32 = 0xFFDDDDDD; // RGB(255,0,153) in ABGR format
 
+// Convert 3D coordinates to 1D index for 257³ voxel array (with border)
+fn to1DWithBorder(id: vec3<u32>) -> u32 {
+    let size = context.grid_size + 1u; // 257
+    return id.z * size * size + id.y * size + id.x;
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    // Check bounds
-    if (id.x >= context.grid_size || id.y >= context.grid_size || id.z >= context.grid_size) {
+    // Check bounds - allow editing 257³ grid (with border)
+    let size = context.grid_size + 1u;
+    if (id.x >= size || id.y >= size || id.z >= size) {
         return;
     }
 
-    let voxel_index = to1D(id);
+    let voxel_index = to1DWithBorder(id);
     let current_voxel = voxels[voxel_index];
 
     // Convert chunk-local voxel coordinates to world position

@@ -22,7 +22,10 @@ export class Chunk {
 		this.id = id;
 		this.position = position;
 
-		const size = Math.pow(gridSize, 3) * 8;
+		// Allocate 257³ voxels (gridSize + 1) to handle chunk borders
+		// Each voxel: density (f32) + color (u32) = 8 bytes
+		const voxelGridSize = gridSize + 1;
+		const size = Math.pow(voxelGridSize, 3) * 8;
 		const sSize = gridSize / compression;
 		const sSize3 = sSize * sSize * sSize;
 		const maxVertices = sSize3 * 1536;

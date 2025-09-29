@@ -108,7 +108,9 @@ fn interpolateColor(color1: u32, color2: u32, val1: f32, val2: f32) -> u32 {
 }
 
 fn getVoxelData(pos: vec3<u32>) -> VoxelData {
-	let index = pos.z * context.grid_size * context.grid_size + pos.y * context.grid_size + pos.x;
+	// Use 257³ grid size (with border voxels)
+	let size = context.grid_size + 1u;
+	let index = pos.z * size * size + pos.y * size + pos.x;
 	return voxels[index];
 }
 
@@ -121,20 +123,24 @@ fn getVoxelColor(pos: vec3<u32>) -> u32 {
 }
 
 fn getVoxelDensitySafe(pos: vec3<i32>) -> f32 {
+	// Allow access to 257³ grid (0-256) for border voxels
+	let size = i32(context.grid_size + 1u);
 	if (pos.x < 0 || pos.y < 0 || pos.z < 0 ||
-	    pos.x >= i32(context.grid_size) ||
-	    pos.y >= i32(context.grid_size) ||
-	    pos.z >= i32(context.grid_size)) {
+	    pos.x >= size ||
+	    pos.y >= size ||
+	    pos.z >= size) {
 		return 1.0; // Outside bounds = solid
 	}
 	return getVoxelDensity(vec3<u32>(pos));
 }
 
 fn getVoxelColorSafe(pos: vec3<i32>) -> u32 {
+	// Allow access to 257³ grid (0-256) for border voxels
+	let size = i32(context.grid_size + 1u);
 	if (pos.x < 0 || pos.y < 0 || pos.z < 0 ||
-	    pos.x >= i32(context.grid_size) ||
-	    pos.y >= i32(context.grid_size) ||
-	    pos.z >= i32(context.grid_size)) {
+	    pos.x >= size ||
+	    pos.y >= size ||
+	    pos.z >= size) {
 		return 0x808080FFu; // Default gray color for outside bounds
 	}
 	return getVoxelColor(vec3<u32>(pos));

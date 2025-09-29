@@ -20,6 +20,8 @@ export class Block {
 	deferredLightBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 	private lightBufferRefs = new Map<Chunk, GPUBuffer>();
+	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
+	private dummyLightBuffer: GPUBuffer | null = null;
 
 	// Space background
 	spaceBackgroundTexture: GPUTexture;
@@ -333,6 +335,29 @@ export class Block {
 		this.timer.readTimestamps();
 	}
 
+	setNeighborChunkGetter(getter: (chunk: Chunk) => Chunk[]) {
+		this.getNeighborChunks = getter;
+	}
+
+	private getDummyLightBuffer(): GPUBuffer {
+		if (!this.dummyLightBuffer) {
+			const sSize = gridSize / compression;
+			const totalCells = sSize * sSize * sSize;
+			const dummyData = new Float32Array(totalCells * 2);
+			// Fill with "no light" values
+			for (let i = 0; i < totalCells; i++) {
+				dummyData[i * 2] = 0.0; // no light
+				dummyData[i * 2 + 1] = 1.0; // full shadow
+			}
+			this.dummyLightBuffer = device.createBuffer({
+				size: dummyData.byteLength,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			});
+			device.queue.writeBuffer(this.dummyLightBuffer, 0, dummyData);
+		}
+		return this.dummyLightBuffer;
+	}
+
 	createDeferredBindGroup() {
 		this.deferredBindGroup = device.createBindGroup({
 			label: "Deferred G-Buffer Textures",
@@ -397,11 +422,44 @@ export class Block {
 			return;
 		}
 
+		const dummyBuffer = this.getDummyLightBuffer();
+
+		// Find neighbor chunks in each direction
+		let neighborNX: Chunk | undefined;
+		let neighborPX: Chunk | undefined;
+		let neighborNY: Chunk | undefined;
+		let neighborPY: Chunk | undefined;
+		let neighborNZ: Chunk | undefined;
+		let neighborPZ: Chunk | undefined;
+
+		if (this.getNeighborChunks) {
+			const neighbors = this.getNeighborChunks(chunk);
+			for (const neighbor of neighbors) {
+				const dx = neighbor.position[0] - chunk.position[0];
+				const dy = neighbor.position[1] - chunk.position[1];
+				const dz = neighbor.position[2] - chunk.position[2];
+
+				if (dx === -1 && dy === 0 && dz === 0) neighborNX = neighbor;
+				else if (dx === 1 && dy === 0 && dz === 0) neighborPX = neighbor;
+				else if (dx === 0 && dy === -1 && dz === 0) neighborNY = neighbor;
+				else if (dx === 0 && dy === 1 && dz === 0) neighborPY = neighbor;
+				else if (dx === 0 && dy === 0 && dz === -1) neighborNZ = neighbor;
+				else if (dx === 0 && dy === 0 && dz === 1) neighborPZ = neighbor;
+			}
+		}
+
+		// Create combined light bind group with current chunk and all 6 neighbors
 		const deferredLightBindGroup = device.createBindGroup({
-			label: "Deferred Light Data",
+			label: "Deferred Light Data with Neighbors",
 			layout: this.deferredPipeline.getBindGroupLayout(3),
 			entries: [
 				{binding: 0, resource: {buffer: chunk.light}},
+				{binding: 1, resource: {buffer: neighborNX?.light ?? dummyBuffer}},
+				{binding: 2, resource: {buffer: neighborPX?.light ?? dummyBuffer}},
+				{binding: 3, resource: {buffer: neighborNY?.light ?? dummyBuffer}},
+				{binding: 4, resource: {buffer: neighborPY?.light ?? dummyBuffer}},
+				{binding: 5, resource: {buffer: neighborNZ?.light ?? dummyBuffer}},
+				{binding: 6, resource: {buffer: neighborPZ?.light ?? dummyBuffer}},
 			],
 		});
 

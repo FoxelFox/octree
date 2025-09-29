@@ -56,8 +56,39 @@ export class Streaming {
 		return p[0] + 16384 * (p[1] + 16384 * p[2]);
 	}
 
+	getChunkAt(position: number[]): Chunk | undefined {
+		return this.grid.get(this.map3D1D(position));
+	}
+
+	getNeighborChunks(chunk: Chunk): Chunk[] {
+		const neighbors: Chunk[] = [];
+		const offsets = [
+			[-1, 0, 0], [1, 0, 0],
+			[0, -1, 0], [0, 1, 0],
+			[0, 0, -1], [0, 0, 1]
+		];
+
+		for (const offset of offsets) {
+			const neighborPos = [
+				chunk.position[0] + offset[0],
+				chunk.position[1] + offset[1],
+				chunk.position[2] + offset[2]
+			];
+			const neighbor = this.getChunkAt(neighborPos);
+			if (neighbor) {
+				neighbors.push(neighbor);
+			}
+		}
+
+		return neighbors;
+	}
+
 	init() {
 		console.log('Running one-time octree generation and compaction...');
+
+		// Set up neighbor chunk getters for cross-chunk lighting
+		this.voxelEditor.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
+		this.block.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
 
 		// Calculate player's initial chunk position
 		const playerChunkPos = this.cameraPositionInGridSpace;
@@ -99,7 +130,7 @@ export class Streaming {
 
 		const meshEncoder = device.createCommandEncoder();
 		this.mesh.update(meshEncoder, newChunk);
-		this.light.update(meshEncoder, newChunk);
+		this.light.update(meshEncoder, newChunk, (c) => this.getNeighborChunks(c));
 		device.queue.submit([meshEncoder.finish()]);
 
 		this.mesh.afterUpdate();
@@ -107,6 +138,12 @@ export class Streaming {
 
 		// Add to grid
 		this.grid.set(this.map3D1D(position), newChunk);
+
+		// Invalidate neighboring chunks' lighting so light propagates across boundaries
+		const neighbors = this.getNeighborChunks(newChunk);
+		for (const neighbor of neighbors) {
+			this.light.invalidate(neighbor);
+		}
 
 		return newChunk;
 	}
@@ -214,7 +251,7 @@ export class Streaming {
 		const chunksArray = Array.from(this.activeChunks);
 
 		for (const chunk of chunksArray) {
-			this.light.update(updateEncoder, chunk);
+			this.light.update(updateEncoder, chunk, (c) => this.getNeighborChunks(c));
 			this.cull.update(updateEncoder, chunk);
 		}
 

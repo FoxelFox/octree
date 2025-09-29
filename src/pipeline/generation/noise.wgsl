@@ -201,11 +201,23 @@ fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
     return rgb + vec3(m);
 }
 
+// Convert 3D coordinates to 1D index for 257³ voxel array (with border)
+fn to1DWithBorder(id: vec3<u32>) -> u32 {
+    let size = context.grid_size + 1u; // 257
+    return id.z * size * size + id.y * size + id.x;
+}
+
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // Generate one extra layer on each axis (0-256 instead of 0-255)
+    let size = context.grid_size + 1u;
+    if (id.x >= size || id.y >= size || id.z >= size) {
+        return;
+    }
+
     let density = generate_sdf_noise(id);
     //let color = generate_color(id, density);
     let color = 0xDDDDDDu;
 
-    voxels[to1D(id)] = VoxelData(density, color);
+    voxels[to1DWithBorder(id)] = VoxelData(density, color);
 }

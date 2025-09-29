@@ -41,9 +41,14 @@ export class Light {
 		return this.timer.renderTime;
 	}
 
-	update(encoder: GPUCommandEncoder, chunk: Chunk) {
+	update(encoder: GPUCommandEncoder, chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]) {
 		const needsUpdate = this.chunkNeedsUpdate.get(chunk) ?? false;
 		if (!needsUpdate) return;
+
+		// Recreate bind group with current neighbor data
+		if (getNeighborChunks) {
+			this.bindGroups.set(chunk, this.createComputeBindGroup(chunk, getNeighborChunks));
+		}
 
 		const bindGroup = this.bindGroups.get(chunk);
 		if (!bindGroup) return;
@@ -86,7 +91,10 @@ export class Light {
 
 		// Swap buffers so the updated one becomes current
 		this.swapBuffers(chunk);
-		this.bindGroups.set(chunk, this.createComputeBindGroup(chunk));
+		// Recreate bind group with swapped buffers
+		if (getNeighborChunks) {
+			this.bindGroups.set(chunk, this.createComputeBindGroup(chunk, getNeighborChunks));
+		}
 
 		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
 		this.chunkIterationCounts.set(chunk, iterationCount);
@@ -115,10 +123,33 @@ export class Light {
 		this.timer.readTimestamps();
 	}
 
+	// Dummy buffer for missing neighbors
+	private dummyLightBuffer: GPUBuffer | null = null;
+
+	private getDummyLightBuffer(): GPUBuffer {
+		if (!this.dummyLightBuffer) {
+			const sSize = gridSize / compression;
+			const totalCells = sSize * sSize * sSize;
+			const dummyData = new Float32Array(totalCells * 2);
+			// Fill with "no light" values
+			for (let i = 0; i < totalCells; i++) {
+				dummyData[i * 2] = 0.0; // no light
+				dummyData[i * 2 + 1] = 1.0; // full shadow
+			}
+			this.dummyLightBuffer = device.createBuffer({
+				size: dummyData.byteLength,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			});
+			device.queue.writeBuffer(this.dummyLightBuffer, 0, dummyData);
+		}
+		return this.dummyLightBuffer;
+	}
+
 	registerChunk(chunk: Chunk) {
 		// Initialize light buffer with skylight
 		this.initializeLighting(chunk);
 
+		// Initial bind group without neighbors (will be updated on first light update)
 		this.bindGroups.set(chunk, this.createComputeBindGroup(chunk));
 
 		// Mark chunk as needing light updates
@@ -230,7 +261,33 @@ export class Light {
 		device.queue.writeBuffer(chunk.nextLight, 0, initData);
 	}
 
-	private createComputeBindGroup(chunk: Chunk): GPUBindGroup {
+	private createComputeBindGroup(chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]): GPUBindGroup {
+		const dummyBuffer = this.getDummyLightBuffer();
+
+		// Find neighbor chunks in each direction
+		let neighborNX: Chunk | undefined;
+		let neighborPX: Chunk | undefined;
+		let neighborNY: Chunk | undefined;
+		let neighborPY: Chunk | undefined;
+		let neighborNZ: Chunk | undefined;
+		let neighborPZ: Chunk | undefined;
+
+		if (getNeighborChunks) {
+			const neighbors = getNeighborChunks(chunk);
+			for (const neighbor of neighbors) {
+				const dx = neighbor.position[0] - chunk.position[0];
+				const dy = neighbor.position[1] - chunk.position[1];
+				const dz = neighbor.position[2] - chunk.position[2];
+
+				if (dx === -1 && dy === 0 && dz === 0) neighborNX = neighbor;
+				else if (dx === 1 && dy === 0 && dz === 0) neighborPX = neighbor;
+				else if (dx === 0 && dy === -1 && dz === 0) neighborNY = neighbor;
+				else if (dx === 0 && dy === 1 && dz === 0) neighborPY = neighbor;
+				else if (dx === 0 && dy === 0 && dz === -1) neighborNZ = neighbor;
+				else if (dx === 0 && dy === 0 && dz === 1) neighborPZ = neighbor;
+			}
+		}
+
 		return device.createBindGroup({
 			label: `Light Data Chunk ${chunk.id}`,
 			layout: this.pipeline.getBindGroupLayout(0),
@@ -246,6 +303,30 @@ export class Light {
 				{
 					binding: 2,
 					resource: {buffer: this.configBuffer},
+				},
+				{
+					binding: 3,
+					resource: {buffer: neighborNX?.light ?? dummyBuffer},
+				},
+				{
+					binding: 4,
+					resource: {buffer: neighborPX?.light ?? dummyBuffer},
+				},
+				{
+					binding: 5,
+					resource: {buffer: neighborNY?.light ?? dummyBuffer},
+				},
+				{
+					binding: 6,
+					resource: {buffer: neighborPY?.light ?? dummyBuffer},
+				},
+				{
+					binding: 7,
+					resource: {buffer: neighborNZ?.light ?? dummyBuffer},
+				},
+				{
+					binding: 8,
+					resource: {buffer: neighborPZ?.light ?? dummyBuffer},
 				},
 			],
 		});

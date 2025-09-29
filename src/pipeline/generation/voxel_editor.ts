@@ -24,6 +24,7 @@ export class VoxelEditor {
 	private block: Block;
 	private mesh: Mesh;
 	private light: Light;
+	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 
 	// Position reading
 	private positionReadTexture: GPUTexture;
@@ -56,6 +57,13 @@ export class VoxelEditor {
 
 		this.initPositionReading();
 		this.initVoxelEditing();
+	}
+
+	/**
+	 * Set callback to get neighboring chunks for light invalidation
+	 */
+	setNeighborChunkGetter(getter: (chunk: Chunk) => Chunk[]) {
+		this.getNeighborChunks = getter;
 	}
 
 	/**
@@ -362,8 +370,9 @@ export class VoxelEditor {
 		computePass.setBindGroup(0, bindGroup);
 		computePass.setBindGroup(1, this.chunkUniformBindGroups.get(command.chunk)!);
 
-		// Dispatch to cover all voxels (could be optimized to only affect nearby voxels)
-		const workgroupsPerDim = Math.ceil(gridSize / 4);
+		// Dispatch to cover all voxels including border (257³)
+		const voxelGridSize = gridSize + 1;
+		const workgroupsPerDim = Math.ceil(voxelGridSize / 4);
 		computePass.dispatchWorkgroups(
 			workgroupsPerDim,
 			workgroupsPerDim,
@@ -473,5 +482,13 @@ export class VoxelEditor {
 
 		// Invalidate lighting after voxel changes
 		this.light.invalidate(chunk);
+
+		// Also invalidate neighboring chunks' lighting so light propagates across boundaries
+		if (this.getNeighborChunks) {
+			const neighbors = this.getNeighborChunks(chunk);
+			for (const neighbor of neighbors) {
+				this.light.invalidate(neighbor);
+			}
+		}
 	}
 }

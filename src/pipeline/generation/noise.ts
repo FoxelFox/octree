@@ -54,10 +54,12 @@ export class Noise {
 		computePass.setPipeline(this.pipeline);
 		computePass.setBindGroup(0, chunkData?.bindGroup);
 		computePass.setBindGroup(1, this.bindGroup1);
+		// Generate 257³ voxels (gridSize + 1) for chunk borders
+		const voxelGridSize = gridSize + 1;
 		computePass.dispatchWorkgroups(
-			Math.ceil(gridSize / 4),
-			Math.ceil(gridSize / 4),
-			Math.ceil(gridSize / 4)
+			Math.ceil(voxelGridSize / 4),
+			Math.ceil(voxelGridSize / 4),
+			Math.ceil(voxelGridSize / 4)
 		);
 		computePass.end();
 	}

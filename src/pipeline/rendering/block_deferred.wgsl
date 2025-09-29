@@ -12,6 +12,13 @@ const FOG_END = 512.0;
 @group(1) @binding(3) var depthTexture: texture_depth_2d;
 @group(2) @binding(0) var space_background_texture: texture_2d<f32>;
 @group(3) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
+// Neighbor light buffers (6 directions: -X, +X, -Y, +Y, -Z, +Z)
+@group(3) @binding(1) var<storage, read> neighbor_light_nx: array<vec2<f32>>; // -X neighbor
+@group(3) @binding(2) var<storage, read> neighbor_light_px: array<vec2<f32>>; // +X neighbor
+@group(3) @binding(3) var<storage, read> neighbor_light_ny: array<vec2<f32>>; // -Y neighbor
+@group(3) @binding(4) var<storage, read> neighbor_light_py: array<vec2<f32>>; // +Y neighbor
+@group(3) @binding(5) var<storage, read> neighbor_light_nz: array<vec2<f32>>; // -Z neighbor
+@group(3) @binding(6) var<storage, read> neighbor_light_pz: array<vec2<f32>>; // +Z neighbor
 
 @vertex
 fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -94,16 +101,14 @@ fn worldToCompressedGrid(world_pos: vec3<f32>) -> vec3<f32> {
 // Sample light data from the compressed grid using trilinear interpolation
 fn sampleLightData(world_pos: vec3<f32>) -> vec2<f32> {
     let grid_pos = worldToCompressedGrid(world_pos);
-    let size = f32(context.grid_size / COMPRESSION);
 
-    // Clamp to grid bounds
-    let clamped_pos = clamp(grid_pos, vec3<f32>(0.0), vec3<f32>(size - 1.0));
-
+    // Don't clamp - allow sampling from neighbor chunks via getLightDataAtGrid
     // Get integer coordinates for the 8 surrounding cells
-    let base_pos = floor(clamped_pos);
-    let fract_pos = clamped_pos - base_pos;
+    let base_pos = floor(grid_pos);
+    let fract_pos = grid_pos - base_pos;
 
     // Sample 8 neighboring light values for trilinear interpolation
+    // getLightDataAtGrid will handle out-of-bounds by sampling from neighbor buffers
     let p000 = getLightDataAtGrid(vec3<i32>(base_pos));
     let p001 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(0.0, 0.0, 1.0)));
     let p010 = getLightDataAtGrid(vec3<i32>(base_pos + vec3<f32>(0.0, 1.0, 0.0)));
@@ -125,16 +130,62 @@ fn sampleLightData(world_pos: vec3<f32>) -> vec2<f32> {
     return mix(c0, c1, fract_pos.z);
 }
 
-// Get light data at specific grid coordinates (with bounds checking)
+// Get light data at specific grid coordinates, including from neighbor chunks
 fn getLightDataAtGrid(grid_pos: vec3<i32>) -> vec2<f32> {
     let size = i32(context.grid_size / COMPRESSION);
 
-    // Check bounds
-    if (grid_pos.x < 0 || grid_pos.y < 0 || grid_pos.z < 0 ||
-        grid_pos.x >= size || grid_pos.y >= size || grid_pos.z >= size) {
-        return vec2<f32>(0.0, 1.0); // No light, full shadow outside bounds
+    // Check if we need to sample from a neighbor chunk
+    if (grid_pos.x < 0) {
+        // Sample from -X neighbor at their rightmost edge
+        let neighbor_pos = vec3<i32>(size - 1, grid_pos.y, grid_pos.z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_nx[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (grid_pos.x >= size) {
+        // Sample from +X neighbor at their leftmost edge
+        let neighbor_pos = vec3<i32>(0, grid_pos.y, grid_pos.z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_px[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (grid_pos.y < 0) {
+        // Sample from -Y neighbor
+        let neighbor_pos = vec3<i32>(grid_pos.x, size - 1, grid_pos.z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_ny[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (grid_pos.y >= size) {
+        // Sample from +Y neighbor
+        let neighbor_pos = vec3<i32>(grid_pos.x, 0, grid_pos.z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_py[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (grid_pos.z < 0) {
+        // Sample from -Z neighbor
+        let neighbor_pos = vec3<i32>(grid_pos.x, grid_pos.y, size - 1);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_nz[index];
+        }
+        return vec2<f32>(0.0, 1.0);
+    } else if (grid_pos.z >= size) {
+        // Sample from +Z neighbor
+        let neighbor_pos = vec3<i32>(grid_pos.x, grid_pos.y, 0);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
+            let index = u32(neighbor_pos.z * size * size + neighbor_pos.y * size + neighbor_pos.x);
+            return neighbor_light_pz[index];
+        }
+        return vec2<f32>(0.0, 1.0);
     }
 
+    // Sample from current chunk
     let index = u32(grid_pos.z * size * size + grid_pos.y * size + grid_pos.x);
     return light_data[index];
 }
@@ -225,19 +276,21 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let world_pos = position_data.xyz;
 
         // Check if this pixel belongs to the current chunk
-        // Convert world position to chunk coordinates
-        let pixel_chunk_x = i32(floor(world_pos.x / f32(context.grid_size)));
-        let pixel_chunk_y = i32(floor(world_pos.y / f32(context.grid_size)));
-        let pixel_chunk_z = i32(floor(world_pos.z / f32(context.grid_size)));
+        // Determine which chunk owns this pixel by comparing world position ranges
+        let grid_size_f = f32(context.grid_size);
+        let chunk_min_x = f32(chunk_world_pos.x);
+        let chunk_max_x = chunk_min_x + grid_size_f;
+        let chunk_min_y = f32(chunk_world_pos.y);
+        let chunk_max_y = chunk_min_y + grid_size_f;
+        let chunk_min_z = f32(chunk_world_pos.z);
+        let chunk_max_z = chunk_min_z + grid_size_f;
 
-        let current_chunk_x = chunk_world_pos.x / i32(context.grid_size);
-        let current_chunk_y = chunk_world_pos.y / i32(context.grid_size);
-        let current_chunk_z = chunk_world_pos.z / i32(context.grid_size);
+        let in_chunk_x = world_pos.x >= chunk_min_x && world_pos.x < chunk_max_x;
+        let in_chunk_y = world_pos.y >= chunk_min_y && world_pos.y < chunk_max_y;
+        let in_chunk_z = world_pos.z >= chunk_min_z && world_pos.z < chunk_max_z;
 
         // Only render if pixel belongs to current chunk
-        if (pixel_chunk_x == current_chunk_x &&
-            pixel_chunk_y == current_chunk_y &&
-            pixel_chunk_z == current_chunk_z) {
+        if (in_chunk_x && in_chunk_y && in_chunk_z) {
 
             // Render geometry with lighting
             let normal_data = textureLoad(normalTexture, pixel_coord, 0);
