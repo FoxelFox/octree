@@ -17,11 +17,13 @@ export class RenderTimer {
 		});
 
 		this.queryBuffer = device.createBuffer({
+			label: `${this.label} Timing Query Buffer`,
 			size: 16,
 			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.queryReadbackBuffer = device.createBuffer({
+			label: `${this.label} Timing Query Readback`,
 			size: 16,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});

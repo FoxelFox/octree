@@ -13,6 +13,7 @@ export class Streaming {
 	generationQueue: number[][] = []; // Queue of chunk positions to generate
 	generatedChunks = new Array<Chunk>();
 	isGenerating = false;
+	pendingCleanup: Chunk[] = [];
 
 	noise = new Noise();
 	light = new Light();
@@ -264,9 +265,17 @@ export class Streaming {
 		this.mesh.afterUpdate();
 		this.cull.afterUpdate();
 		this.light.afterUpdate();
+
+		// Now that GPU commands are submitted, cleanup chunks that are no longer needed
+		if (this.pendingCleanup.length > 0) {
+			const chunksToCleanup = this.pendingCleanup;
+			this.pendingCleanup = [];
+			this.cleanupChunks(chunksToCleanup);
+		}
 	}
 
 	updateActiveChunks(center: number[]) {
+		const previousActiveChunks = new Set(this.activeChunks);
 		this.activeChunks.clear();
 
 		// Get which octant of the chunk the player is in
@@ -289,6 +298,48 @@ export class Streaming {
 			}
 		}
 
-		console.log('Active chunks:', this.activeChunks.size);
+		// Build set of chunks that are needed (active + neighbors of active)
+		const neededChunks = new Set<Chunk>(this.activeChunks);
+		for (const chunk of this.activeChunks) {
+			const neighbors = this.getNeighborChunks(chunk);
+			for (const neighbor of neighbors) {
+				neededChunks.add(neighbor);
+			}
+		}
+
+		// Find chunks that are neither active nor neighbors of active chunks
+		const chunksToRemove: Chunk[] = [];
+		for (const chunk of this.grid.values()) {
+			if (!neededChunks.has(chunk)) {
+				chunksToRemove.push(chunk);
+			}
+		}
+
+		// Queue chunks for cleanup (will happen after GPU submit)
+		if (chunksToRemove.length > 0) {
+			this.pendingCleanup.push(...chunksToRemove);
+		}
+
+		console.log('Active chunks:', this.activeChunks.size, 'Total chunks:', this.grid.size);
+	}
+
+	private async cleanupChunks(chunks: Chunk[]) {
+		for (const chunk of chunks) {
+			const chunkIndex = this.map3D1D(chunk.position);
+			this.grid.delete(chunkIndex);
+
+			// Unregister from all pipelines (cull is async)
+			this.noise.unregisterChunk?.(chunk);
+			this.mesh.unregisterChunk?.(chunk);
+			await this.cull.unregisterChunk?.(chunk);
+			this.light.unregisterChunk?.(chunk);
+			this.block.unregisterChunk?.(chunk);
+			this.voxelEditor.unregisterChunk?.(chunk);
+
+			// Destroy GPU resources
+			chunk.destroy();
+		}
+
+		console.log('Cleaned up', chunks.length, 'inactive chunks');
 	}
 }

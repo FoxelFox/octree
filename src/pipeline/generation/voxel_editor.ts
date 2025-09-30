@@ -169,7 +169,9 @@ export class VoxelEditor {
 		this.chunkBindGroups.set(chunk, bindGroup);
 
 		// Create chunk world position buffer
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
 		const chunkWorldPosBuffer = device.createBuffer({
+			label: `${chunkLabel} VoxelEditor World Position`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
@@ -245,6 +247,7 @@ export class VoxelEditor {
 		// Create buffer to read position data to CPU
 		// Must be a multiple of 256 bytes for WebGPU buffer alignment
 		this.positionReadBuffer = device.createBuffer({
+			label: 'VoxelEditor Position Read Buffer',
 			size: 256, // Minimum required size for texture-to-buffer copy
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
@@ -253,6 +256,7 @@ export class VoxelEditor {
 	private initVoxelEditing() {
 		// Create edit parameters buffer
 		this.editParamsBuffer = device.createBuffer({
+			label: 'VoxelEditor Edit Params',
 			size: 32, // vec3 position + float radius + vec3 operation + padding
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});

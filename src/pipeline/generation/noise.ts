@@ -67,7 +67,9 @@ export class Noise {
 	registerChunk(chunk: Chunk) {
 
 		// Create offset buffer for chunk world position
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
 		const offsetBuffer = device.createBuffer({
+			label: `${chunkLabel} Noise Offset`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});

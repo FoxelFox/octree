@@ -137,6 +137,7 @@ export class Light {
 				dummyData[i * 2 + 1] = 1.0; // full shadow
 			}
 			this.dummyLightBuffer = device.createBuffer({
+				label: 'Light Dummy Buffer',
 				size: dummyData.byteLength,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			});
@@ -157,7 +158,9 @@ export class Light {
 		this.chunkIterationCounts.set(chunk, 0);
 
 		// Create chunk world position buffer
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
 		const chunkWorldPosBuffer = device.createBuffer({
+			label: `${chunkLabel} Light World Position`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
@@ -208,6 +211,7 @@ export class Light {
 
 		// Configuration buffer for simulation parameters
 		this.configBuffer = device.createBuffer({
+			label: 'Light Config Buffer',
 			size: 32, // 8 * 4 bytes for configuration
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});

@@ -19,18 +19,21 @@ export class Mesh {
 		this.timer = new RenderTimer('mesh');
 
 		this.offsetBuffer = device.createBuffer({
+			label: 'Mesh Offset Buffer',
 			size: 16, // vec3<u32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 
 		// Create and initialize lookup table buffers
 		this.edgeTableBuffer = device.createBuffer({
+			label: 'Mesh Edge Table',
 			size: EDGE_TABLE.byteLength,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 		device.queue.writeBuffer(this.edgeTableBuffer, 0, EDGE_TABLE);
 
 		this.triangleTableBuffer = device.createBuffer({
+			label: 'Mesh Triangle Table',
 			size: TRIANGLE_TABLE.byteLength,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
@@ -165,7 +168,9 @@ export class Mesh {
 		});
 
 		// Create chunk world position buffer
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
 		const chunkWorldPosBuffer = device.createBuffer({
+			label: `${chunkLabel} Mesh World Position`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});

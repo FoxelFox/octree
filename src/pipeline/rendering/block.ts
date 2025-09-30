@@ -350,6 +350,7 @@ export class Block {
 				dummyData[i * 2 + 1] = 1.0; // full shadow
 			}
 			this.dummyLightBuffer = device.createBuffer({
+				label: 'Block Dummy Light Buffer',
 				size: dummyData.byteLength,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			});
@@ -387,7 +388,9 @@ export class Block {
 		this.gBufferBindGroups.set(chunk, gBufferBindGroup);
 
 		// Create chunk world position buffer
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
 		const chunkWorldPosBuffer = device.createBuffer({
+			label: `${chunkLabel} Block World Position`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});

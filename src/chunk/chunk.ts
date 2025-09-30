@@ -30,9 +30,10 @@ export class Chunk {
 		const sSize3 = sSize * sSize * sSize;
 		const maxVertices = sSize3 * 1536;
 
+		const chunkLabel = `Chunk[${id}](${position[0]},${position[1]},${position[2]})`;
 
 		this.voxelData = device.createBuffer({
-			label: 'Voxel Data',
+			label: `${chunkLabel} Voxel Data`,
 			size,
 			usage:
 				GPUBufferUsage.STORAGE |
@@ -42,26 +43,31 @@ export class Chunk {
 
 		// Separate buffers for mesh data
 		this.vertexCounts = device.createBuffer({
+			label: `${chunkLabel} Vertex Counts`,
 			size: 4 * sSize3, // u32 = 4 bytes each
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.vertices = device.createBuffer({
+			label: `${chunkLabel} Vertices`,
 			size: 8 * maxVertices, // vec4<f16> = 8 bytes each
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.normals = device.createBuffer({
+			label: `${chunkLabel} Normals`,
 			size: 8 * maxVertices, // vec3<f16> = 8 bytes each (with padding)
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.colors = device.createBuffer({
+			label: `${chunkLabel} Colors`,
 			size: 4 * maxVertices, // u32 = 4 bytes each
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.commands = device.createBuffer({
+			label: `${chunkLabel} Commands`,
 			size: 16 * sSize3,
 			usage:
 				GPUBufferUsage.STORAGE |
@@ -70,6 +76,7 @@ export class Chunk {
 		});
 
 		this.density = device.createBuffer({
+			label: `${chunkLabel} Density`,
 			size: 4 * sSize3,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
@@ -77,12 +84,28 @@ export class Chunk {
 
 		// Create both light buffers: stores light intensity (R) and shadow factor (G) for each compressed cell
 		// Format: RG32Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
-		const bufferConfig = {
+		this.light = device.createBuffer({
+			label: `${chunkLabel} Light`,
 			size: sSize3 * 8, // 2 * 4 bytes per cell (RG32Float)
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		};
-		this.light = device.createBuffer(bufferConfig);
-		this.nextLight = device.createBuffer(bufferConfig);
+		});
+		this.nextLight = device.createBuffer({
+			label: `${chunkLabel} Next Light`,
+			size: sSize3 * 8, // 2 * 4 bytes per cell (RG32Float)
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		});
 	}
 
+	destroy() {
+		// Destroy all GPU buffers to free memory
+		this.voxelData.destroy();
+		this.vertexCounts.destroy();
+		this.commands.destroy();
+		this.vertices.destroy();
+		this.normals.destroy();
+		this.colors.destroy();
+		this.density.destroy();
+		this.light.destroy();
+		this.nextLight.destroy();
+	}
 }

@@ -21,6 +21,7 @@ export class Cull {
 	timer: RenderTimer;
 	private readbackInProgress = new Map<Chunk, boolean>();
 	private framesSinceUpdate = new Map<Chunk, number>();
+	private activeReadbackPromises = new Map<Chunk, Promise<void>>();
 
 	constructor() {
 		this.timer = new RenderTimer("cull");
@@ -83,8 +84,11 @@ export class Cull {
 	}
 
 	registerChunk(chunk: Chunk) {
+		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
+
 		// Create per-chunk counter buffer
 		const counter = device.createBuffer({
+			label: `${chunkLabel} Cull Counter`,
 			size: 4,
 			usage:
 				GPUBufferUsage.STORAGE |
@@ -93,12 +97,14 @@ export class Cull {
 		});
 
 		const counterReadback = device.createBuffer({
+			label: `${chunkLabel} Cull Counter Readback`,
 			size: 4,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
 
 		// Create per-chunk indices buffer
 		const indicesBuffer = device.createBuffer({
+			label: `${chunkLabel} Cull Indices`,
 			size: Math.pow(gridSize / compression, 3) * 4,
 			usage:
 				GPUBufferUsage.STORAGE |
@@ -107,6 +113,7 @@ export class Cull {
 		});
 
 		const indicesReadback = device.createBuffer({
+			label: `${chunkLabel} Cull Indices Readback`,
 			size: Math.pow(gridSize / compression, 3) * 4,
 			usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 		});
@@ -122,7 +129,7 @@ export class Cull {
 		// Create bind group with per-chunk buffers
 		const bindGroup = device.createBindGroup({
 			layout: this.pipeline.getBindGroupLayout(0),
-			label: "Cull",
+			label: `${chunkLabel} Cull Bind Group`,
 			entries: [
 				{
 					binding: 0,
@@ -145,6 +152,7 @@ export class Cull {
 
 		// Create chunk world position buffer
 		const chunkWorldPosBuffer = device.createBuffer({
+			label: `${chunkLabel} Cull World Position`,
 			size: 16, // vec3<i32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
@@ -160,7 +168,7 @@ export class Cull {
 
 		// Create context bind group with chunk world position
 		const contextBindGroup = device.createBindGroup({
-			label: "Cull Context",
+			label: `${chunkLabel} Cull Context Bind Group`,
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{
@@ -183,7 +191,17 @@ export class Cull {
 		this.framesSinceUpdate.set(chunk, 0);
 	}
 
-	unregisterChunk(chunk: Chunk) {
+	async unregisterChunk(chunk: Chunk) {
+		// Wait for any pending readback to complete before destroying buffers
+		const pendingReadback = this.activeReadbackPromises.get(chunk);
+		if (pendingReadback) {
+			try {
+				await pendingReadback;
+			} catch {
+				// Ignore errors, we're cleaning up anyway
+			}
+		}
+
 		// Destroy per-chunk buffers
 		const counter = this.chunkCounters.get(chunk);
 		const counterReadback = this.chunkCounterReadbacks.get(chunk);
@@ -207,6 +225,7 @@ export class Cull {
 		this.chunkWorldPosBuffers.delete(chunk);
 		this.readbackInProgress.delete(chunk);
 		this.framesSinceUpdate.delete(chunk);
+		this.activeReadbackPromises.delete(chunk);
 	}
 
 	private startAsyncReadback(chunk: Chunk) {
@@ -216,14 +235,21 @@ export class Cull {
 		this.readbackInProgress.set(chunk, true);
 
 		// Start async readback without blocking
-		this.performAsyncReadback(chunk)
+		const promise = this.performAsyncReadback(chunk)
 			.then(() => {
 				this.readbackInProgress.set(chunk, false);
+				this.activeReadbackPromises.delete(chunk);
 			})
 			.catch((error) => {
-				console.warn("Culling readback failed:", error);
+				// Only log if it's not an abort error from chunk cleanup
+				if (error.name !== 'AbortError') {
+					console.warn("Culling readback failed:", error);
+				}
 				this.readbackInProgress.set(chunk, false);
+				this.activeReadbackPromises.delete(chunk);
 			});
+
+		this.activeReadbackPromises.set(chunk, promise);
 	}
 
 	private async performAsyncReadback(chunk: Chunk): Promise<void> {
@@ -238,6 +264,11 @@ export class Cull {
 
 		// Wait a frame to ensure GPU work is submitted
 		await new Promise((resolve) => requestAnimationFrame(resolve));
+
+		// Check if chunk was cleaned up while we were waiting
+		if (!this.chunkCounters.has(chunk)) {
+			return; // Chunk was unregistered, abort readback
+		}
 
 		// Atomically copy both counter and indices in the same submission
 		const encoder = device.createCommandEncoder();
