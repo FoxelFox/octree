@@ -11,7 +11,6 @@ import {VoxelEditor} from '../pipeline/generation/voxel_editor';
 export class Streaming {
 	grid = new Map<number, Chunk>();
 	generationQueue: number[][] = []; // Queue of chunk positions to generate
-	generatedChunks = new Array<Chunk>();
 	isGenerating = false;
 	pendingCleanup: Chunk[] = [];
 
@@ -24,8 +23,6 @@ export class Streaming {
 	voxelEditor = new VoxelEditor(this.block, this.mesh, this.light);
 	voxelEditorHandler = new VoxelEditorHandler(gpu, this.voxelEditor);
 
-	chunk: Chunk;
-	lastChunkPos: number[] = [0, 0, 0];
 	nextChunkId = 1;
 	activeChunks = new Set<Chunk>();
 	lastPlayerOctant: number[] = [0, 0, 0]; // Which half of the chunk player is in (0 or 1 for each axis)
@@ -85,31 +82,23 @@ export class Streaming {
 	}
 
 	init() {
-		console.log('Running one-time octree generation and compaction...');
 
 		// Set up neighbor chunk getters for cross-chunk lighting
 		this.voxelEditor.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
 		this.block.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
 
+		// Set up chunk getter for voxel editor
+		this.voxelEditorHandler.setChunkGetter((position) => this.getChunkAt(position));
+
 		// Calculate player's initial chunk position
 		const playerChunkPos = this.cameraPositionInGridSpace;
-		console.log('Player chunk position:', playerChunkPos);
-		this.lastChunkPos = [...playerChunkPos];
 
-		// Generate only the player's current chunk immediately (blocking)
-		this.chunk = this.generateChunk(playerChunkPos);
-
-		// Set initial chunk for voxel editor
-		this.voxelEditorHandler.setCurrentChunk(this.chunk);
 
 		// Initialize active chunks with the current position
 		this.updateActiveChunks(playerChunkPos);
 
 		// Queue surrounding chunks for async generation
 		this.queueChunksAroundPosition(playerChunkPos);
-
-		console.log('Initial setup complete. Chunk queue size:', this.generationQueue.length);
-		console.log('Initial active chunks:', this.activeChunks.size);
 	}
 
 	generateChunk(position: number[]): Chunk {
@@ -150,29 +139,41 @@ export class Streaming {
 	}
 
 	queueChunksAroundPosition(centerPos: number[]) {
-		console.log('Queueing chunks around position:', centerPos);
+		const renderDistance = 0.8; // Same as updateActiveChunks
+		const searchRadius = Math.ceil(renderDistance); // Integer radius to search
 
-		// Get which octant of the chunk the player is in
-		const octant = this.cameraOctantInChunk;
+		// Camera position in world space
+		const camX = camera.position[0];
+		const camZ = camera.position[2];
 
-		// Load 2×2 horizontal chunks (X and Z) at height 0 only
-		for (let dx = 0; dx <= 1; dx++) {
-			for (let dz = 0; dz <= 1; dz++) {
+		// Load chunks within renderDistance (horizontal only)
+		for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+			for (let dz = -searchRadius; dz <= searchRadius; dz++) {
 				const chunkPos = [
-					centerPos[0] + (octant[0] === 0 ? dx - 1 : dx),
+					centerPos[0] + dx,
 					0, // Fixed height at 0
-					centerPos[2] + (octant[2] === 0 ? dz - 1 : dz),
+					centerPos[2] + dz,
 				];
-				const chunkIndex = this.map3D1D(chunkPos);
 
-				// Only queue if chunk doesn't exist
-				if (!this.grid.has(chunkIndex)) {
-					this.generationQueue.push(chunkPos);
+				// Calculate distance from camera to chunk center in world space
+				const chunkCenterX = (chunkPos[0] + 0.5) * gridSize;
+				const chunkCenterZ = (chunkPos[2] + 0.5) * gridSize;
+				const distance = Math.sqrt(
+					(camX - chunkCenterX) ** 2 +
+					(camZ - chunkCenterZ) ** 2
+				) / gridSize;
+
+				// Only queue chunks within circular distance
+				if (distance <= renderDistance) {
+					const chunkIndex = this.map3D1D(chunkPos);
+
+					// Only queue if chunk doesn't exist
+					if (!this.grid.has(chunkIndex)) {
+						this.generationQueue.push(chunkPos);
+					}
 				}
 			}
 		}
-
-		console.log('Queued chunks:', this.generationQueue.length);
 	}
 
 	processGenerationQueue(): boolean {
@@ -211,42 +212,11 @@ export class Streaming {
 			this.updateActiveChunks(center);
 		}
 
-		// Check if player moved to a new chunk OR a new octant within the same chunk
-		const chunkChanged = center[0] !== this.lastChunkPos[0] ||
-			center[1] !== this.lastChunkPos[1] ||
-			center[2] !== this.lastChunkPos[2];
+		// Update active chunks based on new position
+		this.updateActiveChunks(center);
 
-		const octantChanged = octant[0] !== this.lastPlayerOctant[0] ||
-			octant[1] !== this.lastPlayerOctant[1] ||
-			octant[2] !== this.lastPlayerOctant[2];
-
-		if (chunkChanged || octantChanged) {
-			if (chunkChanged) {
-				console.log('Player moved from chunk', this.lastChunkPos, 'to', center);
-				this.lastChunkPos = [...center];
-
-				// Update current chunk reference
-				const chunkIndex = this.map3D1D(center);
-				const newChunk = this.grid.get(chunkIndex);
-
-				if (newChunk) {
-					this.chunk = newChunk;
-					// Update voxel editor handler with new current chunk
-					this.voxelEditorHandler.setCurrentChunk(this.chunk);
-				}
-			}
-
-			if (octantChanged) {
-				console.log('Player moved to octant', octant);
-				this.lastPlayerOctant = [...octant];
-			}
-
-			// Update active chunks based on new position
-			this.updateActiveChunks(center);
-
-			// Queue new chunks that need to be generated
-			this.queueChunksAroundPosition(center);
-		}
+		// Queue new chunks that need to be generated
+		this.queueChunksAroundPosition(center);
 
 		// Update all active chunks
 		const chunksArray = Array.from(this.activeChunks);
@@ -258,42 +228,43 @@ export class Streaming {
 
 		// Render all chunks at once
 		this.block.update(updateEncoder, chunksArray);
-
-		device.queue.submit([updateEncoder.finish()]);
-
-		this.block.afterUpdate();
-		this.mesh.afterUpdate();
-		this.cull.afterUpdate();
-		this.light.afterUpdate();
-
-		// Now that GPU commands are submitted, cleanup chunks that are no longer needed
-		if (this.pendingCleanup.length > 0) {
-			const chunksToCleanup = this.pendingCleanup;
-			this.pendingCleanup = [];
-			this.cleanupChunks(chunksToCleanup);
-		}
 	}
 
 	updateActiveChunks(center: number[]) {
-		const previousActiveChunks = new Set(this.activeChunks);
 		this.activeChunks.clear();
 
-		// Get which octant of the chunk the player is in
-		const octant = this.cameraOctantInChunk;
+		const renderDistance = 0.8;
+		const searchRadius = Math.ceil(renderDistance); // Integer radius to search
 
-		// Add 2×2 horizontal chunks (X and Z) at height 0 only
-		for (let dx = 0; dx <= 1; dx++) {
-			for (let dz = 0; dz <= 1; dz++) {
+		// Camera position in world space
+		const camX = camera.position[0];
+		const camZ = camera.position[2];
+
+		// Add chunks within renderDistance (horizontal only)
+		for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+			for (let dz = -searchRadius; dz <= searchRadius; dz++) {
 				const chunkPos = [
-					center[0] + (octant[0] === 0 ? dx - 1 : dx),
+					center[0] + dx,
 					0, // Fixed height at 0
-					center[2] + (octant[2] === 0 ? dz - 1 : dz),
+					center[2] + dz,
 				];
-				const chunkIndex = this.map3D1D(chunkPos);
-				const chunk = this.grid.get(chunkIndex);
 
-				if (chunk) {
-					this.activeChunks.add(chunk);
+				// Calculate distance from camera to chunk center in world space
+				const chunkCenterX = (chunkPos[0] + 0.5) * gridSize;
+				const chunkCenterZ = (chunkPos[2] + 0.5) * gridSize;
+				const distance = Math.sqrt(
+					(camX - chunkCenterX) ** 2 +
+					(camZ - chunkCenterZ) ** 2
+				) / gridSize;
+
+				// Only activate chunks within circular distance
+				if (distance <= renderDistance) {
+					const chunkIndex = this.map3D1D(chunkPos);
+					const chunk = this.grid.get(chunkIndex);
+
+					if (chunk) {
+						this.activeChunks.add(chunk);
+					}
 				}
 			}
 		}
@@ -319,27 +290,38 @@ export class Streaming {
 		if (chunksToRemove.length > 0) {
 			this.pendingCleanup.push(...chunksToRemove);
 		}
+	}
 
-		console.log('Active chunks:', this.activeChunks.size, 'Total chunks:', this.grid.size);
+	async afterUpdate() {
+		this.block.afterUpdate();
+		this.mesh.afterUpdate();
+		this.cull.afterUpdate();
+		this.light.afterUpdate();
+
+		// Now that GPU commands are submitted, cleanup chunks that are no longer needed
+		if (this.pendingCleanup.length > 0) {
+			const chunksToCleanup = this.pendingCleanup;
+			this.pendingCleanup = [];
+			await this.cleanupChunks(chunksToCleanup);
+		}
 	}
 
 	private async cleanupChunks(chunks: Chunk[]) {
+
 		for (const chunk of chunks) {
 			const chunkIndex = this.map3D1D(chunk.position);
 			this.grid.delete(chunkIndex);
 
 			// Unregister from all pipelines (cull is async)
-			this.noise.unregisterChunk?.(chunk);
-			this.mesh.unregisterChunk?.(chunk);
-			await this.cull.unregisterChunk?.(chunk);
-			this.light.unregisterChunk?.(chunk);
-			this.block.unregisterChunk?.(chunk);
-			this.voxelEditor.unregisterChunk?.(chunk);
+			this.noise.unregisterChunk(chunk);
+			this.mesh.unregisterChunk(chunk);
+			await this.cull.unregisterChunk(chunk);
+			this.light.unregisterChunk(chunk);
+			this.block.unregisterChunk(chunk);
+			this.voxelEditor.unregisterChunk(chunk);
 
 			// Destroy GPU resources
 			chunk.destroy();
 		}
-
-		console.log('Cleaned up', chunks.length, 'inactive chunks');
 	}
 }

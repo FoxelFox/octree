@@ -1,12 +1,18 @@
-import {canvas, compression, context, contextUniform, device, gridSize} from "../../index";
-import shader from "./block.wgsl" with {type: "text"};
-import deferredShader from "./block_deferred.wgsl" with {type: "text"};
-import spaceBackgroundShader from "../generation/space_background.wgsl" with {type: "text"};
-import {RenderTimer} from "../timing";
-import {Chunk} from "../../chunk/chunk";
+import {
+	canvas,
+	compression,
+	context,
+	contextUniform,
+	device,
+	gridSize,
+} from "../../index";
+import shader from "./block.wgsl" with { type: "text" };
+import deferredShader from "./block_deferred.wgsl" with { type: "text" };
+import spaceBackgroundShader from "../generation/space_background.wgsl" with { type: "text" };
+import { RenderTimer } from "../timing";
+import { Chunk } from "../../chunk/chunk";
 
 export class Block {
-
 	// G-buffer pass
 	gBufferPipeline: GPURenderPipeline;
 	gBufferBindGroups = new Map<Chunk, GPUBindGroup>();
@@ -37,7 +43,6 @@ export class Block {
 	diffuseTexture: GPUTexture;
 	depthTexture: GPUTexture;
 
-
 	constructor() {
 		this.timer = new RenderTimer("block");
 		this.createGBufferTextures();
@@ -60,7 +65,7 @@ export class Block {
 			label: "Space Background",
 			layout: this.spaceBackgroundPipeline.getBindGroupLayout(0),
 			entries: [
-				{binding: 0, resource: this.spaceBackgroundTexture.createView()},
+				{ binding: 0, resource: this.spaceBackgroundTexture.createView() },
 			],
 		});
 
@@ -74,9 +79,9 @@ export class Block {
 					code: shader,
 				}),
 				targets: [
-					{format: "rgba32float"}, // Position
-					{format: "rgba16float"}, // Normal
-					{format: "rgba8unorm"},  // Diffuse
+					{ format: "rgba32float" }, // Position
+					{ format: "rgba16float" }, // Normal
+					{ format: "rgba8unorm" }, // Diffuse
 				],
 			},
 			vertex: {
@@ -87,7 +92,7 @@ export class Block {
 			},
 			primitive: {
 				topology: "triangle-list",
-				cullMode: "front"
+				cullMode: "front",
 			},
 			depthStencil: {
 				depthWriteEnabled: true,
@@ -134,11 +139,10 @@ export class Block {
 			},
 		});
 
-
 		this.gBufferUniformBindGroup = device.createBindGroup({
 			label: "Block G-Buffer Context",
 			layout: this.gBufferPipeline.getBindGroupLayout(1),
-			entries: [{binding: 0, resource: contextUniform.uniformBuffer}],
+			entries: [{ binding: 0, resource: contextUniform.uniformBuffer }],
 		});
 
 		this.createDeferredBindGroup();
@@ -148,7 +152,7 @@ export class Block {
 			label: "Deferred Space Background",
 			layout: this.deferredPipeline.getBindGroupLayout(2),
 			entries: [
-				{binding: 0, resource: this.spaceBackgroundTexture.createView()},
+				{ binding: 0, resource: this.spaceBackgroundTexture.createView() },
 			],
 		});
 	}
@@ -164,34 +168,40 @@ export class Block {
 		if (this.diffuseTexture) this.diffuseTexture.destroy();
 		if (this.depthTexture) this.depthTexture.destroy();
 
-		const size = {width: canvas.width, height: canvas.height};
+		const size = { width: canvas.width, height: canvas.height };
 
 		// Position texture (RGBA32Float for high precision world positions)
 		this.positionTexture = device.createTexture({
 			size,
 			format: "rgba32float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+			usage:
+				GPUTextureUsage.RENDER_ATTACHMENT |
+				GPUTextureUsage.TEXTURE_BINDING |
+				GPUTextureUsage.COPY_SRC,
 		});
 
 		// Normal texture (RGBA16Float is sufficient for normals)
 		this.normalTexture = device.createTexture({
 			size,
 			format: "rgba16float",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage:
+				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
 		// Diffuse color texture (RGBA8Unorm for colors)
 		this.diffuseTexture = device.createTexture({
 			size,
 			format: "rgba8unorm",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage:
+				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 
 		// Depth texture
 		this.depthTexture = device.createTexture({
 			size,
 			format: "depth24plus",
-			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage:
+				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 		});
 	}
 
@@ -201,7 +211,7 @@ export class Block {
 
 		// Create space background texture (2048x1024 for good quality)
 		this.spaceBackgroundTexture = device.createTexture({
-			size: {width: 2048, height: 1024},
+			size: { width: 2048, height: 1024 },
 			format: "rgba8unorm",
 			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		});
@@ -217,7 +227,7 @@ export class Block {
 		computePass.setBindGroup(0, this.spaceBackgroundBindGroup);
 		computePass.dispatchWorkgroups(
 			Math.ceil(2048 / 8), // workgroup size is 8x8
-			Math.ceil(1024 / 8)
+			Math.ceil(1024 / 8),
 		);
 		computePass.end();
 
@@ -253,19 +263,19 @@ export class Block {
 					view: this.positionTexture.createView(),
 					loadOp: "clear",
 					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
+					clearValue: { r: 0, g: 0, b: 0, a: 0 },
 				},
 				{
 					view: this.normalTexture.createView(),
 					loadOp: "clear",
 					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
+					clearValue: { r: 0, g: 0, b: 0, a: 0 },
 				},
 				{
 					view: this.diffuseTexture.createView(),
 					loadOp: "clear",
 					storeOp: "store",
-					clearValue: {r: 0, g: 0, b: 0, a: 0},
+					clearValue: { r: 0, g: 0, b: 0, a: 0 },
 				},
 			],
 			depthStencilAttachment: {
@@ -289,10 +299,16 @@ export class Block {
 				const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
 				for (let i = 0; i < chunk.indices.length; ++i) {
 					const meshIndex = chunk.indices[i];
-					if (typeof meshIndex === 'number' && isFinite(meshIndex) && meshIndex <= maxMeshIndex) {
+					if (
+						typeof meshIndex === "number" &&
+						isFinite(meshIndex) &&
+						meshIndex <= maxMeshIndex
+					) {
 						gBufferPass.drawIndirect(chunk.commands, meshIndex * 16);
 					} else if (meshIndex > maxMeshIndex) {
-						console.warn(`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`);
+						console.warn(
+							`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`,
+						);
 					}
 				}
 			}
@@ -312,7 +328,7 @@ export class Block {
 						view: context.getCurrentTexture().createView(),
 						loadOp: isFirstChunk ? "clear" : "load",
 						storeOp: "store",
-						clearValue: {r: 0, g: 0, b: 0, a: 0},
+						clearValue: { r: 0, g: 0, b: 0, a: 0 },
 					},
 				],
 			});
@@ -350,7 +366,7 @@ export class Block {
 				dummyData[i * 2 + 1] = 1.0; // full shadow
 			}
 			this.dummyLightBuffer = device.createBuffer({
-				label: 'Block Dummy Light Buffer',
+				label: "Block Dummy Light Buffer",
 				size: dummyData.byteLength,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			});
@@ -364,24 +380,23 @@ export class Block {
 			label: "Deferred G-Buffer Textures",
 			layout: this.deferredPipeline.getBindGroupLayout(1),
 			entries: [
-				{binding: 0, resource: this.positionTexture.createView()},
-				{binding: 1, resource: this.normalTexture.createView()},
-				{binding: 2, resource: this.diffuseTexture.createView()},
-				{binding: 3, resource: this.depthTexture.createView()},
+				{ binding: 0, resource: this.positionTexture.createView() },
+				{ binding: 1, resource: this.normalTexture.createView() },
+				{ binding: 2, resource: this.diffuseTexture.createView() },
+				{ binding: 3, resource: this.depthTexture.createView() },
 			],
 		});
 	}
 
 	registerChunk(chunk: Chunk) {
-
 		// Create G-buffer bind groups
 		const gBufferBindGroup = device.createBindGroup({
 			label: "Block G-Buffer Meshes",
 			layout: this.gBufferPipeline.getBindGroupLayout(0),
 			entries: [
-				{binding: 1, resource: {buffer: chunk.vertices}},
-				{binding: 2, resource: {buffer: chunk.normals}},
-				{binding: 3, resource: {buffer: chunk.colors}},
+				{ binding: 1, resource: { buffer: chunk.vertices } },
+				{ binding: 2, resource: { buffer: chunk.normals } },
+				{ binding: 3, resource: { buffer: chunk.colors } },
 			],
 		});
 
@@ -400,7 +415,7 @@ export class Block {
 			chunk.position[0] * gridSize,
 			chunk.position[1] * gridSize,
 			chunk.position[2] * gridSize,
-			0 // padding
+			0, // padding
 		]);
 		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
 
@@ -409,14 +424,34 @@ export class Block {
 			label: "Deferred Context",
 			layout: this.deferredPipeline.getBindGroupLayout(0),
 			entries: [
-				{binding: 0, resource: contextUniform.uniformBuffer},
-				{binding: 1, resource: {buffer: chunkWorldPosBuffer}}
+				{ binding: 0, resource: contextUniform.uniformBuffer },
+				{ binding: 1, resource: { buffer: chunkWorldPosBuffer } },
 			],
 		});
 
 		this.deferredUniformBindGroups.set(chunk, deferredUniformBindGroup);
 		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
 		this.updateDeferredLightBindGroup(chunk);
+	}
+
+	unregisterChunk(chunk: Chunk) {
+		// Invalidate bind groups in chunks that reference this chunk as a neighbor
+		if (this.getNeighborChunks) {
+			for (const [otherChunk] of this.deferredLightBindGroups) {
+				const neighbors = this.getNeighborChunks(otherChunk);
+				if (neighbors.includes(chunk)) {
+					// Force recreation of bind group on next update
+					this.lightBufferRefs.delete(otherChunk);
+				}
+			}
+		}
+
+		this.deferredUniformBindGroups.delete(chunk);
+		this.chunkWorldPosBuffers.get(chunk)?.destroy();
+		this.chunkWorldPosBuffers.delete(chunk);
+		this.deferredLightBindGroups.delete(chunk);
+		this.lightBufferRefs.delete(chunk);
+		this.gBufferBindGroups.delete(chunk);
 	}
 
 	private updateDeferredLightBindGroup(chunk: Chunk) {
@@ -456,13 +491,13 @@ export class Block {
 			label: "Deferred Light Data with Neighbors",
 			layout: this.deferredPipeline.getBindGroupLayout(3),
 			entries: [
-				{binding: 0, resource: {buffer: chunk.light}},
-				{binding: 1, resource: {buffer: neighborNX?.light ?? dummyBuffer}},
-				{binding: 2, resource: {buffer: neighborPX?.light ?? dummyBuffer}},
-				{binding: 3, resource: {buffer: neighborNY?.light ?? dummyBuffer}},
-				{binding: 4, resource: {buffer: neighborPY?.light ?? dummyBuffer}},
-				{binding: 5, resource: {buffer: neighborNZ?.light ?? dummyBuffer}},
-				{binding: 6, resource: {buffer: neighborPZ?.light ?? dummyBuffer}},
+				{ binding: 0, resource: { buffer: chunk.light } },
+				{ binding: 1, resource: { buffer: neighborNX?.light ?? dummyBuffer } },
+				{ binding: 2, resource: { buffer: neighborPX?.light ?? dummyBuffer } },
+				{ binding: 3, resource: { buffer: neighborNY?.light ?? dummyBuffer } },
+				{ binding: 4, resource: { buffer: neighborPY?.light ?? dummyBuffer } },
+				{ binding: 5, resource: { buffer: neighborNZ?.light ?? dummyBuffer } },
+				{ binding: 6, resource: { buffer: neighborPZ?.light ?? dummyBuffer } },
 			],
 		});
 

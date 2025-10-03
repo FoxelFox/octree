@@ -192,6 +192,7 @@ export class Cull {
 	}
 
 	async unregisterChunk(chunk: Chunk) {
+
 		// Wait for any pending readback to complete before destroying buffers
 		const pendingReadback = this.activeReadbackPromises.get(chunk);
 		if (pendingReadback) {

@@ -1,6 +1,7 @@
 import { GPUContext } from "../gpu";
 import { VoxelEditor as BaseVoxelEditor } from "../pipeline/generation/voxel_editor";
 import { Chunk } from "../chunk/chunk";
+import { gridSize } from "../index";
 
 export class VoxelEditorHandler {
   private voxelEditor: BaseVoxelEditor;
@@ -8,15 +9,15 @@ export class VoxelEditorHandler {
   private lastLeftPressed = false;
   private lastRightPressed = false;
   private gpu: GPUContext;
-  private currentChunk: Chunk | null = null;
+  private getChunkAtPosition?: (position: number[]) => Chunk | undefined;
 
   constructor(gpu: GPUContext, voxelEditor: BaseVoxelEditor) {
     this.gpu = gpu;
     this.voxelEditor = voxelEditor;
   }
 
-  public setCurrentChunk(chunk: Chunk) {
-    this.currentChunk = chunk;
+  public setChunkGetter(getter: (position: number[]) => Chunk | undefined) {
+    this.getChunkAtPosition = getter;
   }
 
   public handleVoxelEditing() {
@@ -46,32 +47,46 @@ export class VoxelEditorHandler {
         if (worldPosition && this.voxelEditor.hasGeometryAtCenter()) {
           const editRadius = 10.0; // Configurable brush size
 
-          if (!this.currentChunk) {
-            console.warn("No current chunk available for editing");
+          if (!this.getChunkAtPosition) {
+            console.warn("No chunk getter available for editing");
+            return;
+          }
+
+          // Calculate chunk position from world position
+          const chunkPos = [
+            Math.floor(worldPosition[0] / gridSize),
+            Math.floor(worldPosition[1] / gridSize),
+            Math.floor(worldPosition[2] / gridSize),
+          ];
+
+          const chunk = this.getChunkAtPosition(chunkPos);
+
+          if (!chunk) {
+            console.warn("No chunk found at position", chunkPos);
             return;
           }
 
           if (leftJustPressed) {
             // Left click: Add voxels (now non-blocking)
-            this.voxelEditor.addVoxels(worldPosition, editRadius, this.currentChunk);
+            this.voxelEditor.addVoxels(worldPosition, editRadius, chunk);
             console.log(
               "Queued add voxels at:",
               worldPosition[0],
               worldPosition[1],
               worldPosition[2],
               "in chunk",
-              this.currentChunk.position
+              chunk.position
             );
           } else if (rightJustPressed) {
             // Right click: Remove voxels (now non-blocking)
-            this.voxelEditor.removeVoxels(worldPosition, editRadius, this.currentChunk);
+            this.voxelEditor.removeVoxels(worldPosition, editRadius, chunk);
             console.log(
               "Queued remove voxels at:",
               worldPosition[0],
               worldPosition[1],
               worldPosition[2],
               "in chunk",
-              this.currentChunk.position
+              chunk.position
             );
           }
         }

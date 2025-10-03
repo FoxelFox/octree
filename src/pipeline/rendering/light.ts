@@ -18,6 +18,7 @@ export class Light {
 	private chunkIterationCounts = new Map<Chunk, number>();
 	private chunkNeedsUpdate = new Map<Chunk, boolean>();
 	private maxIterations = 16; // Number of iterations to propagate light
+	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 
 	constructor() {
 		this.timer = new RenderTimer("light");
@@ -44,6 +45,11 @@ export class Light {
 	update(encoder: GPUCommandEncoder, chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]) {
 		const needsUpdate = this.chunkNeedsUpdate.get(chunk) ?? false;
 		if (!needsUpdate) return;
+
+		// Store neighbor chunk getter for use in unregisterChunk
+		if (getNeighborChunks) {
+			this.getNeighborChunks = getNeighborChunks;
+		}
 
 		// Recreate bind group with current neighbor data
 		if (getNeighborChunks) {
@@ -195,6 +201,17 @@ export class Light {
 	}
 
 	unregisterChunk(chunk: Chunk) {
+		// Invalidate and recreate bind groups in chunks that reference this chunk as a neighbor
+		if (this.getNeighborChunks) {
+			for (const otherChunk of this.bindGroups.keys()) {
+				const neighbors = this.getNeighborChunks(otherChunk);
+				if (neighbors.includes(chunk)) {
+					// Recreate bind group with dummy buffer for destroyed neighbor
+					this.bindGroups.set(otherChunk, this.createComputeBindGroup(otherChunk, this.getNeighborChunks));
+				}
+			}
+		}
+
 		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
 		if (worldPosBuffer) {
 			worldPosBuffer.destroy();

@@ -1,214 +1,149 @@
-# Automatic Chunk System Implementation
+# Chunk Streaming Optimization TODO
 
-## Chunk Buffer/Bind Group Refactor
+## Critical Performance Issues
 
-- [x] Move per-chunk GPU buffers into `Chunk` so creation/destruction lives with the data container.
-- [x] Add `registerChunk(chunk)` / `unregisterChunk(chunk)` hooks to each pipeline (`Mesh`, `Light`, `Cull`, `Block`) to
-  create and destroy bind groups tied to the chunk’s buffers.
-- [x] Cache pipeline-specific bind groups in `Map<Chunk, …>` structures and reuse them across frames instead of
-  rebuilding every dispatch.
-- [ ] Update streaming lifecycle: when a chunk is spawned, create its buffers then call each pipeline hook; on unload,
-  call hooks before freeing buffers.
-- [ ] Audit shaders for chunk-local resource indexing (e.g., pass chunk ID or offsets) so the new binding scheme stays
-  valid.
-- [ ] Write teardown utilities to destroy bind groups/buffers when a chunk retires to avoid leaks.
+### 1. Command Encoder Synchronization (index.ts:67, streaming.ts:262)
+**Current**: Creates encoder in loop, immediately submits in `streaming.update()`
+- Forces synchronization every frame
+- Prevents GPU work batching
+- **Fix**: Pass encoder to `streaming.update()` and let caller control submission
 
-## Overview
+### 2. Synchronous Chunk Generation (streaming.ts:115-149)
+**Current**: `generateChunk()` blocks on each generation stage
+```typescript
+// Line 128-130: Blocks on noise
+const encoder = device.createCommandEncoder();
+this.noise.update(encoder, newChunk);
+device.queue.submit([encoder.finish()]);
 
-Restructure the current single 256³ world into an infinite world system with 256×256×256 voxel chunks. Each chunk
-contains 32³ meshlets (8×8×8 voxels each) with individual density and light cache buffers. Target ~18 active chunks with
-automatic loading/unloading.
+// Line 132-135: Then blocks on mesh/light
+const meshEncoder = device.createCommandEncoder();
+this.mesh.update(meshEncoder, newChunk);
+this.light.update(meshEncoder, newChunk, ...);
+device.queue.submit([meshEncoder.finish()]);
+```
+- **Fix**: Make async, pipeline stages, batch multiple chunks
 
-## Current Architecture Analysis
+### 3. Excessive Array Conversions (streaming.ts:252)
+**Current**: `Array.from(this.activeChunks)` every frame
+- **Fix**: Cache array or iterate Set directly
 
-- **Current**: Single 256³ world (gridSize=256, compression=8)
-- **Current**: 32³ meshlets per world, each 8³ voxels
-- **Current**: Single density buffer (32³ floats), single light buffer (32³ × RG)
-- **Target**: Multiple 256³ chunks, each with own buffers
+### 4. Inefficient Neighbor Lookup (streaming.ts:64-85)
+**Current**: Creates arrays on every call
+```typescript
+const offsets = [
+    [-1, 0, 0], [1, 0, 0],
+    [0, -1, 0], [0, 1, 0],
+    [0, 0, -1], [0, 0, 1]
+];
+```
+- Called frequently (lines 255, 304)
+- **Fix**: Static cached offset array
 
-## Core Architecture Changes
+### 5. Single Chunk Per Frame (streaming.ts:178-200)
+**Current**: `processGenerationQueue()` generates 1 chunk/frame with flag
+- Causes visible pop-in on fast movement
+- **Fix**: Batch multiple chunks or async generation with priority queue
 
-### 1. Chunk Management System
+### 6. Blocking Cleanup (streaming.ts:326-348)
+**Current**: `await device.queue.onSubmittedWorkDone()` stalls cleanup
+- All unregistrations serial
+- **Fix**: Batch cleanup or use timestamp queries
 
-- [ ] **Create ChunkManager class** (`src/chunk/ChunkManager.ts`)
-	- Track active chunks in `Map<string, Chunk>` (key: `"${x},${y},${z}"`)
-	- Handle chunk coordinate ↔ world space conversion
-	- Implement chunk visibility testing using camera frustum
-	- Manage chunk lifecycle (UNLOADED → GENERATING → READY → UNLOADING)
-	- LRU cache management for memory limits
+### 7. Underutilized Double Buffering (chunk.ts:86-96)
+**Current**: Light buffers double buffered but not async swapped
+- **Fix**: Overlap compute with rendering
 
-- [ ] **Restructure Chunk class** (`src/chunk/chunk.ts`)
-	- **Current**: Basic GPU buffers (meshes, commands, density, indices)
-	- **Add**: Chunk world coordinates (chunkX, chunkY, chunkZ)
-	- **Add**: Chunk size constant = 256 voxels (maintains current world size)
-	- **Add**: Internal meshlet count = 32³ (maintains current compression)
-	- **Add**: Loading state enum and timestamp
-	- **Add**: Per-chunk density buffer (32³ floats)
-	- **Add**: Per-chunk light cache buffer (32³ × RG32Float)
-	- **Add**: GPU buffer cleanup and destroy methods
+## Medium Priority Issues
 
-### 2. Dynamic World Generation
+### 8. Memory Allocations in Hot Path
+- Line 163: `[centerPos[0] + ..., 0, centerPos[2] + ...]`
+- Line 230: `[...center]`
+- Line 241: `[...octant]`
+- **Fix**: Reuse objects, mutate in place
 
-- [ ] **Extend Noise class** (`src/pipeline/noise.ts`)
-	- **Current**: Generates single 256³ noise buffer
-	- **Add**: `generateChunkNoise(chunkX, chunkY, chunkZ)` method
-	- **Add**: Chunk offset uniforms for world-space noise sampling
-	- **Add**: Per-chunk noise buffer management
-	- **Modify**: Make noise generation coordinate-aware (world coords vs local chunk coords)
+### 9. Grid Lookup Hash Function (streaming.ts:56-58)
+**Current**: `p[0] + 16384 * (p[1] + 16384 * p[2])`
+- 2 multiplications per lookup
+- Called multiple times/frame for same positions
+- **Fix**: Cache recent lookups (LRU map)
 
-- [ ] **Update Mesh pipeline** (`src/pipeline/mesh.ts`)
-	- **Current**: Single mesh buffer for 32³ meshlets
-	- **Add**: Per-chunk mesh generation with world offsets
-	- **Add**: Chunk-specific bindGroups and uniform buffers
-	- **Modify**: `update()` method to accept chunk parameter
-	- **Add**: Batch processing of multiple chunks per frame (max 2-3)
+### 10. Console Logging in Production (multiple locations)
+- Lines 88, 96, 111, 112, 153, 175, 193, 225, 240, 323, 347
+- **Fix**: Debug flag or remove from hot paths
 
-### 3. Light System Restructure
+## Implementation Priority
 
-- [ ] **Extend Light class** (`src/pipeline/light.ts`)
-	- **Current**: Single light buffer (32³ × RG) with flood-fill propagation
-	- **Add**: Per-chunk light cache (32³ × RG32Float each)
-	- **Add**: Cross-chunk light propagation at chunk boundaries
-	- **Add**: Chunk light invalidation and selective updates
-	- **Add**: Light boundary handling (skylight propagation between chunks)
-	- **Modify**: Initialize skylight per-chunk based on world height
+1. **Remove console.logs** (quick win, easy)
+2. **Cache neighbor offsets** (quick win, easy)
+3. **Cache activeChunks array** (quick win, easy)
+4. **Batch encoder submissions** (medium, high impact)
+5. **Async chunk generation** (hard, high impact)
+6. **Multi-chunk per frame** (medium, high impact)
+7. **Optimize cleanup** (medium, medium impact)
+8. **Cache position arrays** (easy, low impact)
+9. **Cache hash lookups** (medium, low impact)
+10. **Better double buffering** (hard, medium impact)
 
-### 4. Chunk Loading Strategy
+## Detailed Fixes
 
-- [ ] **Implement distance-based loading**
-	- Calculate distance from player chunk to candidate chunks
-	- Load radius: 2-3 chunks (adjustable based on performance)
-	- Unload radius: 4-5 chunks (with hysteresis to prevent thrashing)
-	- Priority system: visible chunks > adjacent > distant
+### Fix #1: Batch Encoder Submissions
+```typescript
+// index.ts
+const updateEncoder = device.createCommandEncoder();
+streaming.update(updateEncoder);
+// Don't submit here - let streaming.update() batch everything
 
-- [ ] **Add visibility culling**
-	- Test chunk bounding boxes (256³ each) against camera frustum
-	- Load visible chunks + 1 chunk ahead in movement/view direction
-	- Skip generation for occluded chunks (behind player)
+// streaming.ts:262
+// Only submit once at end after all pipelines updated
+```
 
-### 5. Memory Management
+### Fix #2: Async Chunk Generation
+```typescript
+async generateChunkAsync(position: number[]): Promise<Chunk> {
+    // Register all pipelines
+    // Submit all generation work in single encoder
+    // Return chunk immediately, mark as "generating"
+    // Use fence/timestamp to know when ready
+}
+```
 
-- [ ] **Implement chunk capacity limits**
-	- Maximum active chunks: ~18 (configurable)
-	- Per-chunk memory: ~64MB (meshes + density + light + noise)
-	- Total memory budget: ~1.2GB for chunks
-	- LRU eviction when exceeding limits
+### Fix #3: Static Neighbor Offsets
+```typescript
+private static readonly NEIGHBOR_OFFSETS = [
+    [-1, 0, 0], [1, 0, 0],
+    [0, -1, 0], [0, 1, 0],
+    [0, 0, -1], [0, 0, 1]
+] as const;
+```
 
-- [ ] **Add streaming queue system**
-	- Async chunk generation queue (max 2-3 concurrent)
-	- Frame-spread work distribution (avoid hitches)
-	- Priority-based processing (visible chunks first)
-	- Graceful degradation under load
+### Fix #4: Cache Active Chunks Array
+```typescript
+private activeChunksArray: Chunk[] = [];
+private activeChunksDirty = true;
 
-### 6. Player Movement Integration
+updateActiveChunks(center: number[]) {
+    // ... existing logic ...
+    this.activeChunksDirty = true;
+}
 
-- [ ] **Update player tracking** (`src/data/context.ts`)
-	- Track current player chunk coordinates
-	- Detect chunk boundary crossings (256-voxel boundaries)
-	- Trigger chunk load/unload events on movement
-	- Calculate view direction for predictive loading
+update() {
+    if (this.activeChunksDirty) {
+        this.activeChunksArray = Array.from(this.activeChunks);
+        this.activeChunksDirty = false;
+    }
+    // Use this.activeChunksArray
+}
+```
 
-- [ ] **Enhance camera system** (`src/gpu.ts`)
-	- Add `getPlayerChunk()` method
-	- Calculate frustum planes for chunk culling
-	- Track movement velocity for predictive loading distance
-
-### 7. Multi-Chunk Rendering
-
-- [ ] **Update Cull system** (`src/pipeline/cull.ts`)
-	- **Current**: Single cull pass for 32³ meshlets
-	- **Add**: Multi-chunk culling with index merging
-	- **Add**: Per-chunk cull results combination
-	- **Add**: Chunk-relative indexing for mesh commands
-	- **Modify**: Handle dynamic chunk count in render loop
-
-- [ ] **Update Block system** (`src/pipeline/block.ts`)
-	- **Current**: Renders single mesh buffer
-	- **Add**: Multi-chunk G-buffer generation
-	- **Add**: Chunk-aware mesh binding and drawing
-	- **Modify**: Handle multiple light buffers in deferred pass
-	- **Add**: Chunk boundary seamless rendering
-
-### 8. Voxel Editor Integration
-
-- [ ] **Update VoxelEditor** (`src/pipeline/voxel_editor.ts`)
-	- **Add**: World position → chunk coordinate conversion
-	- **Add**: Cross-chunk editing support (edit radius may span chunks)
-	- **Modify**: Target specific chunk buffers for edits
-	- **Add**: Multi-chunk mesh regeneration after edits
-	- **Add**: Cross-chunk light propagation after voxel changes
-
-### 9. Configuration Constants
-
-- [ ] **Add chunk system settings** (`src/index.ts`)
-  ```typescript
-  export const CHUNK_SIZE = 256; // voxels per chunk dimension  
-  export const CHUNK_MESHLETS = 32; // meshlets per chunk dimension (32³ total)
-  export const MESHLET_SIZE = 8; // voxels per meshlet (8³)
-  export const MAX_ACTIVE_CHUNKS = 18;
-  export const CHUNK_LOAD_RADIUS = 2; // chunks
-  export const CHUNK_UNLOAD_RADIUS = 4; // chunks  
-  export const MAX_CONCURRENT_CHUNK_GENS = 2;
-  ```
-
-### 10. WGSL Shader Updates
-
-- [ ] **Update compute shaders for chunk awareness**
-	- **`noise.wgsl`**: Add chunk world offset uniforms
-	- **`mesh.wgsl`**: Add chunk coordinate system handling
-	- **`light.wgsl`**: Add cross-chunk boundary light propagation
-	- **`cull.wgsl`**: Handle per-chunk meshlet indexing
-	- **`block.wgsl`**: Support multi-chunk mesh rendering
-
-### 11. Performance Optimizations
-
-- [ ] **Frame-spread chunk processing**
-	- Use `requestIdleCallback` for non-critical chunk ops
-	- Budget GPU time per frame (e.g., max 2ms for chunk work)
-	- Async/await patterns for chunk loading pipeline
-	- Batch similar operations across chunks
-
-- [ ] **Chunk state persistence**
-	- Cache recently unloaded chunk data (compressed)
-	- Fast reload for chunks returning to view
-	- Lazy cleanup of GPU resources (frame delay)
-
-## Implementation Notes
-
-### Chunk Coordinate System
-
-- **Chunk size**: 256³ voxels (same as current world)
-- **Chunk coords**: Integer (chunkX, chunkY, chunkZ)
-- **World position**: `(chunkX * 256, chunkY * 256, chunkZ * 256)`
-- **Chunk key**: `"${chunkX},${chunkY},${chunkZ}"`
-- **Player chunk**: `floor(playerPos / 256)`
-
-### Memory Layout Per Chunk
-
-- **Voxel data**: 256³ × 4 bytes = 64MB (noise buffer)
-- **Meshlet meshes**: 32³ × maxMeshSize = variable (compressed f16)
-- **Density cache**: 32³ × 4 bytes = 128KB
-- **Light cache**: 32³ × 8 bytes = 256KB (RG32Float)
-- **Total per chunk**: ~65-70MB
-
-### Loading Pipeline
-
-1. **Player movement detected** → calculate required chunk set
-2. **Missing chunks identified** → add to generation queue
-3. **Queue processing** → max 2-3 chunks generating concurrently
-4. **Chunk ready** → add to active set, update rendering
-5. **Excess chunks** → unload oldest unused (LRU)
-
-### Cross-Chunk Operations
-
-- **Light propagation**: Handle boundaries with neighbor chunk communication
-- **Voxel editing**: Edit operations may affect multiple chunks
-- **Seamless rendering**: Ensure no gaps between adjacent chunks
-
-## Testing & Validation
-
-- [ ] **Chunk transitions**: Verify seamless loading (no pop-in/out)
-- [ ] **Performance**: Maintain 60fps with 18 active chunks
-- [ ] **Memory**: Stay within ~1.2GB budget for chunk data
-- [ ] **Edge cases**: Rapid movement, chunk boundaries, editing
-- [ ] **Multi-chunk features**: Cross-chunk lighting, seamless editing
+### Fix #5: Multi-Chunk Processing
+```typescript
+processGenerationQueue(budget: number = 2): number {
+    let generated = 0;
+    while (generated < budget && this.generationQueue.length > 0) {
+        // Generate chunk
+        generated++;
+    }
+    return generated;
+}
+```

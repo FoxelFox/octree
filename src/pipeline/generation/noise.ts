@@ -36,8 +36,6 @@ export class Noise {
 
 	update(commandEncoder: GPUCommandEncoder, chunk: Chunk) {
 
-		console.log('generate noise for chunk at', chunk.position);
-
 		// Update chunk offset buffer with world-space position
 		const chunkData = this.data.get(chunk);
 		if (chunkData) {
@@ -83,7 +81,7 @@ export class Noise {
 			],
 		});
 
-		this.data.set(chunk, { bindGroup, offsetBuffer });
+		this.data.set(chunk, {bindGroup, offsetBuffer});
 	}
 
 	unregisterChunk(chunk: Chunk) {

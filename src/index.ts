@@ -9,9 +9,6 @@ await gpu.init();
 
 export const maxDepth = 8;
 export const gridSize = Math.pow(2, maxDepth);
-export const worstCaseMaxNodes = Math.floor(
-	(Math.pow(8, maxDepth + 1) - 1) / 7,
-);
 export const device = gpu.device;
 export const context = gpu.context;
 export const canvas = gpu.canvas;
@@ -50,12 +47,17 @@ document
 	.getElementsByTagName("canvas")[0]
 	.setAttribute("style", "position: fixed;");
 
+let lastFrame = performance.now();
+
 function loop() {
-	const frameStart = performance.now();
+	let now = performance.now();
+	const time = now - lastFrame;
+	lastFrame = now;
+
 
 	gpu.update();
 
-	// Handle voxel editing when pointer is locked and in Block mode
+	// Handle voxel editing when the pointer is locked and in Block mode
 	if (streaming.voxelEditor && gpu.mouse.locked) {
 		streaming.voxelEditorHandler.handleVoxelEditing();
 	}
@@ -65,30 +67,29 @@ function loop() {
 	}
 
 	const updateEncoder = device.createCommandEncoder();
-
 	streaming.update(updateEncoder);
+	device.queue.submit([updateEncoder.finish()]);
+	streaming.afterUpdate().then(() => {
+		// Update the frame graph with GPU render time from the active renderer
+		frameGraphManager.getFrameGraph().addFrameTime(time);
+		frameGraphManager.render();
 
-	// Get current renderer's timing based on pipeline mode
-	const currentRenderTime = streaming.block.renderTime;
+		// Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
+		const frameEnd = performance.now();
+		const cpuFrameTime = frameEnd - now;
 
-	// Update frame graph with GPU render time from active renderer
-	frameGraphManager.getFrameGraph().addFrameTime(currentRenderTime);
-	frameGraphManager.render();
+		// Update timing display
+		const stats = frameGraphManager.getFrameGraph().getCurrentStats();
 
-	// Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
-	const frameEnd = performance.now();
-	const cpuFrameTime = frameEnd - frameStart;
+		timingDisplay.update(
+			time,
+			streaming.light.renderTime,
+			cpuFrameTime,
+			stats,
+			streaming.cull.count,
+		);
 
-	// Update timing display
-	const stats = frameGraphManager.getFrameGraph().getCurrentStats();
+		requestAnimationFrame(loop);
 
-	timingDisplay.update(
-		currentRenderTime,
-		streaming.light.renderTime,
-		cpuFrameTime,
-		stats,
-		streaming.cull.count,
-	);
-
-	requestAnimationFrame(loop);
+	});
 }
