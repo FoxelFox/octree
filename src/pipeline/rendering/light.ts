@@ -59,47 +59,29 @@ export class Light {
 		const bindGroup = this.bindGroups.get(chunk);
 		if (!bindGroup) return;
 
-		// Start from the current lighting state
-		encoder.copyBufferToBuffer(
-			chunk.light,
-			0,
-			chunk.nextLight,
-			0,
-			chunk.light.size,
+		// Run single pass of light propagation
+		const pass = encoder.beginComputePass({
+			label: `Light Propagation`,
+			timestampWrites: this.timer.getTimestampWrites(),
+		});
+
+		pass.setPipeline(this.pipeline);
+		pass.setBindGroup(0, bindGroup);
+		pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
+
+		// Dispatch with 4x4x4 workgroup size to match mesh generation
+		const sSize = gridSize / compression;
+		const workgroupsPerDim = Math.ceil(sSize / 4);
+		pass.dispatchWorkgroups(
+			workgroupsPerDim,
+			workgroupsPerDim,
+			workgroupsPerDim,
 		);
 
-		// Run multiple iterations of light propagation on the next buffer
-		for (let i = 0; i < this.maxIterations; i++) {
-			const pass = encoder.beginComputePass({
-				label: `Light Propagation Iteration ${i}`,
-				timestampWrites: i === 0 ? this.timer.getTimestampWrites() : undefined,
-			});
-
-			pass.setPipeline(this.pipeline);
-			pass.setBindGroup(0, bindGroup);
-			pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
-
-			// Dispatch with 4x4x4 workgroup size to match mesh generation
-			const sSize = gridSize / compression;
-			const workgroupsPerDim = Math.ceil(sSize / 4);
-			pass.dispatchWorkgroups(
-				workgroupsPerDim,
-				workgroupsPerDim,
-				workgroupsPerDim,
-			);
-
-			pass.end();
-		}
+		pass.end();
 
 		if (this.timer.getTimestampWrites()) {
 			this.timer.resolveTimestamps(encoder);
-		}
-
-		// Swap buffers so the updated one becomes current
-		this.swapBuffers(chunk);
-		// Recreate bind group with swapped buffers
-		if (getNeighborChunks) {
-			this.bindGroups.set(chunk, this.createComputeBindGroup(chunk, getNeighborChunks));
 		}
 
 		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
@@ -277,9 +259,8 @@ export class Light {
 			}
 		}
 
-		// Initialize both buffers with the same data
+		// Initialize light buffer
 		device.queue.writeBuffer(chunk.light, 0, initData);
-		device.queue.writeBuffer(chunk.nextLight, 0, initData);
 	}
 
 	private createComputeBindGroup(chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]): GPUBindGroup {
@@ -319,7 +300,7 @@ export class Light {
 				},
 				{
 					binding: 1,
-					resource: {buffer: chunk.nextLight},
+					resource: {buffer: chunk.light},
 				},
 				{
 					binding: 2,
@@ -351,11 +332,5 @@ export class Light {
 				},
 			],
 		});
-	}
-
-	private swapBuffers(chunk: Chunk) {
-		const current = chunk.light;
-		chunk.light = chunk.nextLight;
-		chunk.nextLight = current;
 	}
 }

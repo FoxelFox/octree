@@ -14,8 +14,7 @@ export class Chunk {
 	indices: Uint32Array;    // indices for meshlets that are actually needed to be rendered
 
 
-	light: GPUBuffer;		// double buffered light data
-	nextLight: GPUBuffer;   // double buffered light data
+	light: GPUBuffer;		// light data
 
 
 	constructor(id: number, position: number[]) {
@@ -82,15 +81,10 @@ export class Chunk {
 		});
 
 
-		// Create both light buffers: stores light intensity (R) and shadow factor (G) for each compressed cell
+		// Create light buffer: stores light intensity (R) and shadow factor (G) for each compressed cell
 		// Format: RG32Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
 		this.light = device.createBuffer({
 			label: `${chunkLabel} Light`,
-			size: sSize3 * 8, // 2 * 4 bytes per cell (RG32Float)
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		});
-		this.nextLight = device.createBuffer({
-			label: `${chunkLabel} Next Light`,
 			size: sSize3 * 8, // 2 * 4 bytes per cell (RG32Float)
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 		});
@@ -106,6 +100,5 @@ export class Chunk {
 		this.colors.destroy();
 		this.density.destroy();
 		this.light.destroy();
-		this.nextLight.destroy();
 	}
 }
