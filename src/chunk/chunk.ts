@@ -9,9 +9,10 @@ export class Chunk {
 
 	vertices: GPUBuffer;
 	normals: GPUBuffer;
-	colors: GPUBuffer;
-	density: GPUBuffer;      // used for density occlusion culling and light blocker
-	indices: Uint32Array;    // indices for meshlets that are actually needed to be rendered
+	materialColors: GPUBuffer;  // original material colors from voxels
+	colors: GPUBuffer;          // lit colors (materialColors * lighting)
+	density: GPUBuffer;         // used for density occlusion culling and light blocker
+	indices: Uint32Array;       // indices for meshlets that are actually needed to be rendered
 
 
 	light: GPUBuffer;		// light data
@@ -59,10 +60,16 @@ export class Chunk {
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
-		this.colors = device.createBuffer({
-			label: `${chunkLabel} Colors`,
+		this.materialColors = device.createBuffer({
+			label: `${chunkLabel} Material Colors`,
 			size: 4 * maxVertices, // u32 = 4 bytes each
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.colors = device.createBuffer({
+			label: `${chunkLabel} Lit Colors`,
+			size: 4 * maxVertices, // u32 = 4 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 		});
 
 		this.commands = device.createBuffer({
@@ -97,6 +104,7 @@ export class Chunk {
 		this.commands.destroy();
 		this.vertices.destroy();
 		this.normals.destroy();
+		this.materialColors.destroy();
 		this.colors.destroy();
 		this.density.destroy();
 		this.light.destroy();

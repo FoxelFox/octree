@@ -154,7 +154,7 @@ export class Mesh {
 				},
 				{
 					binding: 4,
-					resource: {buffer: chunk.colors}, // Output
+					resource: {buffer: chunk.materialColors}, // Output
 				},
 				{
 					binding: 5,

@@ -26,7 +26,7 @@ struct VoxelData {
 @group(0) @binding(1) var<storage, read_write> vertexCounts: array<u32>;
 @group(0) @binding(2) var<storage, read_write> vertices: array<vec4<f16>>;
 @group(0) @binding(3) var<storage, read_write> normals: array<vec3<f16>>;
-@group(0) @binding(4) var<storage, read_write> colors: array<u32>;
+@group(0) @binding(4) var<storage, read_write> materialColors: array<u32>;
 @group(0) @binding(5) var<storage, read_write> commands: array<Command>;
 @group(0) @binding(6) var<storage, read_write> density: array<u32>;
 
@@ -322,9 +322,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						normals[baseVertexIndex + 1] = vec3<f16>(n2);
 						normals[baseVertexIndex + 2] = vec3<f16>(n3);
 
-						colors[baseVertexIndex] = c1;
-						colors[baseVertexIndex + 1] = c2;
-						colors[baseVertexIndex + 2] = c3;
+						materialColors[baseVertexIndex] = c1;
+						materialColors[baseVertexIndex + 1] = c2;
+						materialColors[baseVertexIndex + 2] = c3;
 
 						vertexCount += 3u;
 					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {

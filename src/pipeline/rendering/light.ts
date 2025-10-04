@@ -1,5 +1,6 @@
 import {compression, contextUniform, device, gridSize} from "../../index";
 import shader from "./light.wgsl" with {type: "text"};
+import vertexLightShader from "./vertex_light.wgsl" with {type: "text"};
 import {RenderTimer} from "../timing";
 import {Chunk} from "../../chunk/chunk";
 
@@ -7,9 +8,13 @@ export class Light {
 
 	// Compute pipeline for light propagation
 	pipeline: GPUComputePipeline;
+	vertexLightPipeline: GPUComputePipeline;
 	bindGroups = new Map<Chunk, GPUBindGroup>();
+	vertexLightBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
+	vertexLightContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
+	vertexLightCombinedBuffers = new Map<Chunk, GPUBuffer>();
 	// Configuration uniforms
 	configBuffer: GPUBuffer;
 	// Timer for profiling
@@ -19,8 +24,13 @@ export class Light {
 	private chunkNeedsUpdate = new Map<Chunk, boolean>();
 	private maxIterations = 16; // Number of iterations to propagate light
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
+	private readonly lightSegmentSize: number;
 
 	constructor() {
+		const sSize = gridSize / compression;
+		const cellCount = sSize * sSize * sSize;
+		this.lightSegmentSize = cellCount * 8;
+
 		this.timer = new RenderTimer("light");
 		this.initBuffers();
 
@@ -36,6 +46,17 @@ export class Light {
 			},
 		});
 
+		// Create vertex light baking pipeline
+		this.vertexLightPipeline = device.createComputePipeline({
+			label: "Vertex Light Baking",
+			layout: "auto",
+			compute: {
+				module: device.createShaderModule({
+					code: vertexLightShader,
+				}),
+				entryPoint: "main",
+			},
+		});
 	}
 
 	get renderTime(): number {
@@ -54,6 +75,7 @@ export class Light {
 		// Recreate bind group with current neighbor data
 		if (getNeighborChunks) {
 			this.bindGroups.set(chunk, this.createComputeBindGroup(chunk, getNeighborChunks));
+			this.vertexLightBindGroups.set(chunk, this.createVertexLightBindGroup(chunk));
 		}
 
 		const bindGroup = this.bindGroups.get(chunk);
@@ -87,10 +109,43 @@ export class Light {
 		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
 		this.chunkIterationCounts.set(chunk, iterationCount);
 
-		// Stop updating after the light has stabilized
+		// Bake lighting into vertex colors when light stabilizes
 		if (iterationCount >= this.maxIterations * 2) {
 			this.chunkNeedsUpdate.set(chunk, false);
+			this.bakeVertexLighting(encoder, chunk, getNeighborChunks);
 		}
+	}
+
+	bakeVertexLighting(encoder: GPUCommandEncoder, chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]) {
+		const vertexLightBindGroup = this.vertexLightBindGroups.get(chunk);
+		if (!vertexLightBindGroup) return;
+
+		this.populateVertexLightCombinedBuffer(encoder, chunk, getNeighborChunks);
+
+		const pass = encoder.beginComputePass({
+			label: `Vertex Light Baking`,
+		});
+
+		// Create light bind group for vertex shader
+		const lightBindGroup = this.createVertexLightDataBindGroup(chunk);
+
+		pass.setPipeline(this.vertexLightPipeline);
+		pass.setBindGroup(0, vertexLightBindGroup);
+		pass.setBindGroup(1, lightBindGroup);
+		pass.setBindGroup(2, this.vertexLightContextBindGroups.get(chunk)!);
+
+		// Dispatch for all vertices (64 vertices per workgroup)
+		const sSize = gridSize / compression;
+		const maxVertices = sSize * sSize * sSize * 1536;
+		const workgroups = Math.ceil(maxVertices / 64);
+
+		// Split across X and Y dimensions to stay within limits (max 65535 per dimension)
+		const maxWorkgroupsPerDim = 65535;
+		const workgroupsX = Math.min(workgroups, maxWorkgroupsPerDim);
+		const workgroupsY = Math.ceil(workgroups / maxWorkgroupsPerDim);
+		pass.dispatchWorkgroups(workgroupsX, workgroupsY);
+
+		pass.end();
 	}
 
 	// Force a light update (call when voxels are modified)
@@ -127,7 +182,10 @@ export class Light {
 			this.dummyLightBuffer = device.createBuffer({
 				label: 'Light Dummy Buffer',
 				size: dummyData.byteLength,
-				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				usage:
+					GPUBufferUsage.STORAGE |
+					GPUBufferUsage.COPY_DST |
+					GPUBufferUsage.COPY_SRC,
 			});
 			device.queue.writeBuffer(this.dummyLightBuffer, 0, dummyData);
 		}
@@ -140,6 +198,7 @@ export class Light {
 
 		// Initial bind group without neighbors (will be updated on first light update)
 		this.bindGroups.set(chunk, this.createComputeBindGroup(chunk));
+		this.vertexLightBindGroups.set(chunk, this.createVertexLightBindGroup(chunk));
 
 		// Mark chunk as needing light updates
 		this.chunkNeedsUpdate.set(chunk, true);
@@ -180,6 +239,31 @@ export class Light {
 
 		this.chunkContextBindGroups.set(chunk, contextBindGroup);
 		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+
+		const combinedLightBuffer = device.createBuffer({
+			label: `${chunkLabel} Vertex Light Combined`,
+			size: this.lightSegmentSize * 7,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+		});
+		this.vertexLightCombinedBuffers.set(chunk, combinedLightBuffer);
+
+		// Create vertex light context bind group
+		const vertexLightContextBindGroup = device.createBindGroup({
+			label: "Vertex Light Context",
+			layout: this.vertexLightPipeline.getBindGroupLayout(2),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: contextUniform.uniformBuffer},
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunkWorldPosBuffer},
+				},
+			],
+		});
+
+		this.vertexLightContextBindGroups.set(chunk, vertexLightContextBindGroup);
 	}
 
 	unregisterChunk(chunk: Chunk) {
@@ -190,6 +274,7 @@ export class Light {
 				if (neighbors.includes(chunk)) {
 					// Recreate bind group with dummy buffer for destroyed neighbor
 					this.bindGroups.set(otherChunk, this.createComputeBindGroup(otherChunk, this.getNeighborChunks));
+					this.vertexLightBindGroups.set(otherChunk, this.createVertexLightBindGroup(otherChunk));
 				}
 			}
 		}
@@ -199,7 +284,12 @@ export class Light {
 			worldPosBuffer.destroy();
 		}
 		this.bindGroups.delete(chunk);
+		this.vertexLightBindGroups.delete(chunk);
 		this.chunkContextBindGroups.delete(chunk);
+		this.vertexLightContextBindGroups.delete(chunk);
+		const combinedBuffer = this.vertexLightCombinedBuffers.get(chunk);
+		combinedBuffer?.destroy();
+		this.vertexLightCombinedBuffers.delete(chunk);
 		this.chunkWorldPosBuffers.delete(chunk);
 		this.chunkNeedsUpdate.delete(chunk);
 		this.chunkIterationCounts.delete(chunk);
@@ -331,6 +421,101 @@ export class Light {
 					resource: {buffer: neighborPZ?.light ?? dummyBuffer},
 				},
 			],
+		});
+	}
+
+	private createVertexLightBindGroup(chunk: Chunk): GPUBindGroup {
+		return device.createBindGroup({
+			label: `Vertex Light Baking Chunk ${chunk.id}`,
+			layout: this.vertexLightPipeline.getBindGroupLayout(0),
+			entries: [
+				{
+					binding: 0,
+					resource: {buffer: chunk.vertices},
+				},
+				{
+					binding: 1,
+					resource: {buffer: chunk.materialColors},  // Read original material colors
+				},
+				{
+					binding: 2,
+					resource: {buffer: chunk.normals},
+				},
+				{
+					binding: 3,
+					resource: {buffer: chunk.colors},  // Write lit colors
+				},
+			],
+		});
+	}
+
+	private createVertexLightDataBindGroup(chunk: Chunk): GPUBindGroup {
+		const combinedBuffer = this.vertexLightCombinedBuffers.get(chunk);
+		if (!combinedBuffer) {
+			throw new Error("Missing combined light buffer for chunk");
+		}
+
+		return device.createBindGroup({
+			label: `Vertex Light Data Chunk ${chunk.id}`,
+			layout: this.vertexLightPipeline.getBindGroupLayout(1),
+			entries: [
+				{ binding: 0, resource: { buffer: combinedBuffer } },
+			],
+		});
+	}
+
+	private populateVertexLightCombinedBuffer(
+		encoder: GPUCommandEncoder,
+		chunk: Chunk,
+		getNeighborChunks?: (chunk: Chunk) => Chunk[],
+	) {
+		const combinedBuffer = this.vertexLightCombinedBuffers.get(chunk);
+		if (!combinedBuffer) {
+			return;
+		}
+
+		const neighborGetter = getNeighborChunks ?? this.getNeighborChunks;
+		let neighborNX: Chunk | undefined;
+		let neighborPX: Chunk | undefined;
+		let neighborNY: Chunk | undefined;
+		let neighborPY: Chunk | undefined;
+		let neighborNZ: Chunk | undefined;
+		let neighborPZ: Chunk | undefined;
+
+		if (neighborGetter) {
+			const neighbors = neighborGetter(chunk);
+			for (const neighbor of neighbors) {
+				const dx = neighbor.position[0] - chunk.position[0];
+				const dy = neighbor.position[1] - chunk.position[1];
+				const dz = neighbor.position[2] - chunk.position[2];
+
+				if (dx === -1 && dy === 0 && dz === 0) neighborNX = neighbor;
+				else if (dx === 1 && dy === 0 && dz === 0) neighborPX = neighbor;
+				else if (dx === 0 && dy === -1 && dz === 0) neighborNY = neighbor;
+				else if (dx === 0 && dy === 1 && dz === 0) neighborPY = neighbor;
+				else if (dx === 0 && dy === 0 && dz === -1) neighborNZ = neighbor;
+				else if (dx === 0 && dy === 0 && dz === 1) neighborPZ = neighbor;
+			}
+		}
+
+		const sources = [
+			chunk.light,
+			neighborNX?.light ?? this.getDummyLightBuffer(),
+			neighborPX?.light ?? this.getDummyLightBuffer(),
+			neighborNY?.light ?? this.getDummyLightBuffer(),
+			neighborPY?.light ?? this.getDummyLightBuffer(),
+			neighborNZ?.light ?? this.getDummyLightBuffer(),
+			neighborPZ?.light ?? this.getDummyLightBuffer(),
+		];
+
+		sources.forEach((source, index) => {
+			encoder.copyBufferToBuffer(
+				source,
+				0,
+				combinedBuffer,
+				this.lightSegmentSize * index,
+				this.lightSegmentSize,
+			);
 		});
 	}
 }

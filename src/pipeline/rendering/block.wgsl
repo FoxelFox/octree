@@ -4,7 +4,7 @@ enable f16;
 
 struct VertexOutput {
   @builtin(position) position : vec4f,
-  @location(0) color: vec3<f32>,
+  @location(0) color: vec4<f32>,
   @location(1) world_pos: vec3<f32>,
   @location(2) normal: vec3<f32>,
 }
@@ -38,7 +38,7 @@ fn vs_main(
 	// Use per-vertex color from mesh data
 	let packedColor = colors[globalVertexIndex];
 	let vertexColor = unpackColor(packedColor);
-	out.color = vertexColor.rgb;
+	out.color = vertexColor;
 
 	// Get world position (convert from f16 to f32)
 	let world_pos = vec3<f32>(vertices[globalVertexIndex].xyz);
@@ -55,7 +55,7 @@ fn vs_main(
 struct GBufferOutput {
     @location(0) position: vec4<f32>,  // xyz = world position, w = depth
     @location(1) normal: vec4<f32>,    // xyz = world normal, w = unused
-    @location(2) diffuse: vec4<f32>,   // xyz = diffuse color, w = unused
+    @location(2) diffuse: vec4<f32>,   // xyz = diffuse color, w = light visibility (1 - shadow)
 }
 
 @fragment
@@ -75,7 +75,8 @@ fn fm_main(in: VertexOutput) -> GBufferOutput {
     output.normal = vec4<f32>(normalize(in.normal), 1.0);
 
     // Output diffuse color
-    output.diffuse = vec4<f32>(in.color, 1.0);
+    // Store baked RGB and light visibility (alpha) for the deferred pass
+    output.diffuse = in.color;
 
     return output;
 }

@@ -85,7 +85,6 @@ export class Streaming {
 
 		// Set up neighbor chunk getters for cross-chunk lighting
 		this.voxelEditor.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
-		this.block.setNeighborChunkGetter((chunk) => this.getNeighborChunks(chunk));
 
 		// Set up chunk getter for voxel editor
 		this.voxelEditorHandler.setChunkGetter((position) => this.getChunkAt(position));
@@ -121,6 +120,8 @@ export class Streaming {
 		const meshEncoder = device.createCommandEncoder();
 		this.mesh.update(meshEncoder, newChunk);
 		this.light.update(meshEncoder, newChunk, (c) => this.getNeighborChunks(c));
+		// Bake lighting immediately to show initial results (will be re-baked when light stabilizes)
+		this.light.bakeVertexLighting(meshEncoder, newChunk, (c) => this.getNeighborChunks(c));
 		device.queue.submit([meshEncoder.finish()]);
 
 		this.mesh.afterUpdate();
