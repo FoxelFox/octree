@@ -7,7 +7,7 @@ export class Noise {
 	pipeline: GPUComputePipeline;
 	bindGroup1: GPUBindGroup;
 
-	data = new Map<Chunk, { bindGroup: GPUBindGroup, offsetBuffer: GPUBuffer }>();
+	data = new Map<Chunk, { bindGroup: GPUBindGroup, offsetBuffer: GPUBuffer, paramsBuffer: GPUBuffer }>();
 
 	constructor() {
 
@@ -34,30 +34,53 @@ export class Noise {
 		});
 	}
 
-	update(commandEncoder: GPUCommandEncoder, chunk: Chunk) {
+	update(
+		commandEncoder: GPUCommandEncoder,
+		chunk: Chunk,
+		sliceOffset = 0,
+		sliceCount?: number,
+	) {
+		const chunkData = this.data.get(chunk);
+		if (!chunkData) {
+			return;
+		}
 
 		// Update chunk offset buffer with world-space position
-		const chunkData = this.data.get(chunk);
-		if (chunkData) {
-			const offsetData = new Int32Array([
-				chunk.position[0] * gridSize,
-				chunk.position[1] * gridSize,
-				chunk.position[2] * gridSize,
-				0 // padding
-			]);
-			device.queue.writeBuffer(chunkData.offsetBuffer, 0, offsetData);
+		const offsetData = new Int32Array([
+			chunk.position[0] * gridSize,
+			chunk.position[1] * gridSize,
+			chunk.position[2] * gridSize,
+			0 // padding
+		]);
+		device.queue.writeBuffer(chunkData.offsetBuffer, 0, offsetData);
+
+		const voxelGridSize = gridSize + 1;
+		const clampedOffset = Math.min(Math.max(sliceOffset, 0), voxelGridSize);
+		const effectiveCount = sliceCount ?? voxelGridSize;
+		const clampedCount = Math.min(effectiveCount, voxelGridSize - clampedOffset);
+		if (clampedCount <= 0) {
+			return;
 		}
+
+		const paramsData = new Uint32Array([
+			clampedOffset,
+			clampedCount,
+			0,
+			0,
+		]);
+		device.queue.writeBuffer(chunkData.paramsBuffer, 0, paramsData);
 
 		const computePass = commandEncoder.beginComputePass();
 		computePass.setPipeline(this.pipeline);
-		computePass.setBindGroup(0, chunkData?.bindGroup);
+		computePass.setBindGroup(0, chunkData.bindGroup);
 		computePass.setBindGroup(1, this.bindGroup1);
-		// Generate 257³ voxels (gridSize + 1) for chunk borders
-		const voxelGridSize = gridSize + 1;
+
+		const workgroupsPerDim = Math.ceil(voxelGridSize / 4);
+		const workgroupsZ = Math.max(1, Math.ceil(clampedCount / 4));
 		computePass.dispatchWorkgroups(
-			Math.ceil(voxelGridSize / 4),
-			Math.ceil(voxelGridSize / 4),
-			Math.ceil(voxelGridSize / 4)
+			workgroupsPerDim,
+			workgroupsPerDim,
+			workgroupsZ,
 		);
 		computePass.end();
 	}
@@ -72,22 +95,30 @@ export class Noise {
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 
+		const paramsBuffer = device.createBuffer({
+			label: `${chunkLabel} Noise Slice Params`,
+			size: 16,
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
 		const bindGroup = device.createBindGroup({
 			label: 'Noise',
 			layout: this.pipeline.getBindGroupLayout(0),
 			entries: [
 				{binding: 0, resource: chunk.voxelData},
-				{binding: 1, resource: {buffer: offsetBuffer}}
+				{binding: 1, resource: {buffer: offsetBuffer}},
+				{binding: 2, resource: {buffer: paramsBuffer}},
 			],
 		});
 
-		this.data.set(chunk, {bindGroup, offsetBuffer});
-	}
+		this.data.set(chunk, {bindGroup, offsetBuffer, paramsBuffer});
+}
 
 	unregisterChunk(chunk: Chunk) {
 		const chunkData = this.data.get(chunk);
 		if (chunkData) {
 			chunkData.offsetBuffer.destroy();
+			chunkData.paramsBuffer.destroy();
 		}
 		this.data.delete(chunk);
 	}

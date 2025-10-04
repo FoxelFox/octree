@@ -14,6 +14,9 @@ enable f16;
 // Lit colors (write-only, output with lighting applied)
 @group(0) @binding(3) var<storage, read_write> colors: array<u32>;
 
+// Vertex counts per meshlet
+@group(0) @binding(4) var<storage, read> vertexCounts: array<u32>;
+
 // Light data (chunk + 6 neighbors packed sequentially)
 @group(1) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
 
@@ -173,23 +176,35 @@ fn packColor(color: vec4<f32>) -> u32 {
 
 const MAX_WORKGROUPS_PER_DIM: u32 = 65535u;
 const WORKGROUP_SIZE: u32 = 64u;
+const VERTICES_PER_MESHLET: u32 = 1536u;
 
 @compute @workgroup_size(64)
 fn main(
     @builtin(workgroup_id) workgroup_id: vec3<u32>,
     @builtin(local_invocation_index) local_index: u32,
 ) {
-    // Flatten 2D workgroup dispatch into a single linear vertex index
+    // Flatten 2D workgroup dispatch into linear index
     let linear_workgroup = workgroup_id.y * MAX_WORKGROUPS_PER_DIM + workgroup_id.x;
-    let vertex_index = linear_workgroup * WORKGROUP_SIZE + local_index;
+    let linear_index = linear_workgroup * WORKGROUP_SIZE + local_index;
 
-    // Get total vertex count
-    let sSize = context.grid_size / COMPRESSION;
-    let max_vertices = sSize * sSize * sSize * 1536u;
+    // Compute which meshlet this invocation belongs to
+    let meshlet_index = linear_index / VERTICES_PER_MESHLET;
+    let vertex_in_meshlet = linear_index % VERTICES_PER_MESHLET;
 
-    if (vertex_index >= max_vertices) {
+    // Bounds check: ensure we don't exceed meshlet count
+    if (meshlet_index >= arrayLength(&vertexCounts)) {
         return;
     }
+
+    let vertex_count = vertexCounts[meshlet_index];
+
+    // Early exit if this vertex slot is beyond the meshlet's actual vertex count
+    if (vertex_in_meshlet >= vertex_count) {
+        return;
+    }
+
+    // Calculate actual vertex index in the vertex buffer
+    let vertex_index = meshlet_index * VERTICES_PER_MESHLET + vertex_in_meshlet;
 
     // Get vertex position in world space
     let vertex = vertices[vertex_index];

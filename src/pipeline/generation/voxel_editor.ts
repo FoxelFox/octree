@@ -5,6 +5,7 @@ import { Chunk } from "../../chunk/chunk";
 import { Block } from "../rendering/block";
 import { Mesh } from "./mesh";
 import { Light } from "../rendering/light";
+import { Cull } from "../rendering/cull";
 
 interface VoxelEditCommand {
 	worldPosition: Float32Array;
@@ -24,6 +25,7 @@ export class VoxelEditor {
 	private block: Block;
 	private mesh: Mesh;
 	private light: Light;
+	private cull: Cull;
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 
 	// Position reading
@@ -49,10 +51,11 @@ export class VoxelEditor {
 	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
-	constructor(block: Block, mesh: Mesh, light: Light) {
+	constructor(block: Block, mesh: Mesh, light: Light, cull: Cull) {
 		this.block = block;
 		this.mesh = mesh;
 		this.light = light;
+		this.cull = cull;
 		this.timer = new RenderTimer("voxel_editor");
 
 		this.initPositionReading();
@@ -508,12 +511,15 @@ export class VoxelEditor {
 		// Invalidate lighting after voxel changes
 		this.light.invalidate(chunk);
 
-		// Also invalidate neighboring chunks' lighting so light propagates across boundaries
+		let neighbors: Chunk[] = [];
 		if (this.getNeighborChunks) {
-			const neighbors = this.getNeighborChunks(chunk);
+			neighbors = this.getNeighborChunks(chunk);
 			for (const neighbor of neighbors) {
 				this.light.invalidate(neighbor);
 			}
 		}
+
+		// Refresh culling data for the edited chunk and its neighbors
+		this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
 	}
 }

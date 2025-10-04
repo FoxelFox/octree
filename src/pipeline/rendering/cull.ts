@@ -15,13 +15,26 @@ export class Cull {
 	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
+	chunkCombinedDensityBuffers = new Map<Chunk, GPUBuffer>();
+	private chunkDirty = new Map<Chunk, boolean>();
+	private needsRefresh = true;
+	private copyPerformedThisFrame = false;
+	private playerChunk: [number, number, number] | null = null;
 
 	// output
-	count: number = 0;
+	private chunkCounts = new Map<Chunk, number>();
 	timer: RenderTimer;
 	private readbackInProgress = new Map<Chunk, boolean>();
 	private framesSinceUpdate = new Map<Chunk, number>();
 	private activeReadbackPromises = new Map<Chunk, Promise<void>>();
+	private dummyDensityBuffer: GPUBuffer | null = null;
+	private readonly neighborhoodRadius = 1;
+	private readonly neighborhoodDiameter: number;
+	private readonly neighborhoodCount: number;
+	private readonly cellsPerChunk: number;
+	private readonly densitySegmentSize: number;
+	private readonly combinedDensitySize: number;
+	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 
 	constructor() {
 		this.timer = new RenderTimer("cull");
@@ -36,15 +49,48 @@ export class Cull {
 				entryPoint: "main",
 			},
 		});
+
+		const cellsPerAxis = gridSize / compression;
+		this.cellsPerChunk = Math.pow(cellsPerAxis, 3);
+		this.densitySegmentSize = this.cellsPerChunk * Uint32Array.BYTES_PER_ELEMENT;
+		this.neighborhoodDiameter = this.neighborhoodRadius * 2 + 1;
+		this.neighborhoodCount = Math.pow(this.neighborhoodDiameter, 3);
+		this.combinedDensitySize = this.densitySegmentSize * this.neighborhoodCount;
 	}
 
 	get renderTime(): number {
 		return this.timer.renderTime;
 	}
 
-	update(encoder: GPUCommandEncoder, chunk: Chunk) {
+	get count(): number {
+		let total = 0;
+		for (const count of this.chunkCounts.values()) {
+			total += count;
+		}
+		return total;
+	}
+
+	setPlayerChunk(position: number[]) {
+		if (
+			!this.playerChunk ||
+			this.playerChunk[0] !== position[0] ||
+			this.playerChunk[1] !== position[1] ||
+			this.playerChunk[2] !== position[2]
+		) {
+			this.playerChunk = [position[0], position[1], position[2]];
+			this.needsRefresh = true;
+		}
+	}
+
+	update(encoder: GPUCommandEncoder, chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]) {
+		if (getNeighborChunks) {
+			this.getNeighborChunks = getNeighborChunks;
+		}
+
 		const counter = this.chunkCounters.get(chunk);
 		if (!counter) return;
+
+		this.populateCombinedDensityBuffer(encoder, chunk, getNeighborChunks);
 
 		// Reset counter before culling
 		device.queue.writeBuffer(counter, 0, new Uint32Array([0]));
@@ -64,7 +110,6 @@ export class Cull {
 			workgroupsPerDim,
 		);
 		pass.end();
-
 		this.timer.resolveTimestamps(encoder);
 
 		// Start async readback if not already in progress
@@ -81,6 +126,10 @@ export class Cull {
 
 	afterUpdate() {
 		this.timer.readTimestamps();
+		if (this.copyPerformedThisFrame) {
+			this.copyPerformedThisFrame = false;
+			this.needsRefresh = false;
+		}
 	}
 
 	registerChunk(chunk: Chunk) {
@@ -120,11 +169,20 @@ export class Cull {
 
 		device.queue.writeBuffer(counter, 0, new Uint32Array([0]));
 
+		const combinedDensityBuffer = device.createBuffer({
+			label: `${chunkLabel} Cull Combined Density`,
+			size: this.combinedDensitySize,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+		});
+
 		// Store per-chunk buffers
 		this.chunkCounters.set(chunk, counter);
 		this.chunkCounterReadbacks.set(chunk, counterReadback);
 		this.chunkIndicesBuffers.set(chunk, indicesBuffer);
 		this.chunkIndicesReadbacks.set(chunk, indicesReadback);
+		this.chunkCombinedDensityBuffers.set(chunk, combinedDensityBuffer);
+		this.chunkDirty.set(chunk, true);
+		this.needsRefresh = true;
 
 		// Create bind group with per-chunk buffers
 		const bindGroup = device.createBindGroup({
@@ -145,7 +203,7 @@ export class Cull {
 				},
 				{
 					binding: 3,
-					resource: {buffer: chunk.density},
+					resource: {buffer: combinedDensityBuffer},
 				},
 			],
 		});
@@ -189,6 +247,7 @@ export class Cull {
 		// Initialize per-chunk state
 		this.readbackInProgress.set(chunk, false);
 		this.framesSinceUpdate.set(chunk, 0);
+		this.chunkCounts.set(chunk, 0);
 	}
 
 	async unregisterChunk(chunk: Chunk) {
@@ -209,12 +268,14 @@ export class Cull {
 		const indicesBuffer = this.chunkIndicesBuffers.get(chunk);
 		const indicesReadback = this.chunkIndicesReadbacks.get(chunk);
 		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
+		const combinedDensityBuffer = this.chunkCombinedDensityBuffers.get(chunk);
 
 		counter?.destroy();
 		counterReadback?.destroy();
 		indicesBuffer?.destroy();
 		indicesReadback?.destroy();
 		worldPosBuffer?.destroy();
+		combinedDensityBuffer?.destroy();
 
 		// Clean up maps
 		this.chunkCounters.delete(chunk);
@@ -224,9 +285,116 @@ export class Cull {
 		this.chunkBindGroups.delete(chunk);
 		this.chunkContextBindGroups.delete(chunk);
 		this.chunkWorldPosBuffers.delete(chunk);
+		this.chunkCombinedDensityBuffers.delete(chunk);
+		this.chunkDirty.delete(chunk);
 		this.readbackInProgress.delete(chunk);
 		this.framesSinceUpdate.delete(chunk);
 		this.activeReadbackPromises.delete(chunk);
+		this.chunkCounts.delete(chunk);
+	}
+
+	invalidateAll() {
+		for (const chunk of this.chunkDirty.keys()) {
+			this.chunkDirty.set(chunk, true);
+		}
+		this.needsRefresh = true;
+	}
+
+	invalidateChunk(chunk: Chunk) {
+		if (this.chunkDirty.has(chunk)) {
+			this.chunkDirty.set(chunk, true);
+		}
+		this.needsRefresh = true;
+	}
+
+	invalidateChunkAndNeighbors(chunk: Chunk, neighbors: Chunk[]) {
+		this.invalidateChunk(chunk);
+		for (const neighbor of neighbors) {
+			this.invalidateChunk(neighbor);
+		}
+	}
+
+	invalidateChunks(chunks: Iterable<Chunk>) {
+		for (const chunk of chunks) {
+			this.invalidateChunk(chunk);
+		}
+	}
+
+	private populateCombinedDensityBuffer(
+		encoder: GPUCommandEncoder,
+		chunk: Chunk,
+		getNeighborChunks?: (chunk: Chunk) => Chunk[],
+	) {
+		const combinedBuffer = this.chunkCombinedDensityBuffers.get(chunk);
+		if (!combinedBuffer) {
+			return;
+		}
+
+		const needsCopy = this.needsRefresh || (this.chunkDirty.get(chunk) ?? true);
+		if (!needsCopy) {
+			return;
+		}
+
+		const dummyBuffer = this.getDummyDensityBuffer();
+		const sources = new Array<GPUBuffer>(this.neighborhoodCount).fill(dummyBuffer);
+		sources[this.indexFromOffset(0, 0, 0)] = chunk.density;
+
+		const neighborGetter = getNeighborChunks ?? this.getNeighborChunks;
+		if (neighborGetter) {
+			const neighbors = neighborGetter(chunk);
+			for (const neighbor of neighbors) {
+				const dx = neighbor.position[0] - chunk.position[0];
+				const dy = neighbor.position[1] - chunk.position[1];
+				const dz = neighbor.position[2] - chunk.position[2];
+
+				if (
+					Math.abs(dx) > this.neighborhoodRadius ||
+					Math.abs(dy) > this.neighborhoodRadius ||
+					Math.abs(dz) > this.neighborhoodRadius
+				) {
+					continue;
+				}
+
+				const index = this.indexFromOffset(dx, dy, dz);
+				sources[index] = neighbor.density;
+			}
+		}
+
+		for (let i = 0; i < this.neighborhoodCount; i++) {
+			const source = sources[i];
+			encoder.copyBufferToBuffer(
+				source,
+				0,
+				combinedBuffer,
+				i * this.densitySegmentSize,
+				this.densitySegmentSize,
+			);
+		}
+
+		this.chunkDirty.set(chunk, false);
+		this.copyPerformedThisFrame = true;
+	}
+
+	private indexFromOffset(dx: number, dy: number, dz: number): number {
+		const diameter = this.neighborhoodDiameter;
+		const radius = this.neighborhoodRadius;
+		return (dz + radius) * diameter * diameter + (dy + radius) * diameter + (dx + radius);
+	}
+
+	private getDummyDensityBuffer(): GPUBuffer {
+		if (!this.dummyDensityBuffer) {
+			const zeroData = new Uint32Array(this.cellsPerChunk);
+			this.dummyDensityBuffer = device.createBuffer({
+				label: `Cull Dummy Density`,
+				size: zeroData.byteLength,
+				usage:
+					GPUBufferUsage.STORAGE |
+					GPUBufferUsage.COPY_SRC |
+					GPUBufferUsage.COPY_DST,
+			});
+			device.queue.writeBuffer(this.dummyDensityBuffer, 0, zeroData);
+		}
+		return this.dummyDensityBuffer;
 	}
 
 	private startAsyncReadback(chunk: Chunk) {
@@ -302,7 +470,7 @@ export class Cull {
 		chunk.indices = new Uint32Array(indicesData.slice(0, readSize));
 		indicesReadback.unmap();
 
-		// Update count last, after we've used the consistent value
-		this.count = newCount;
+		// Update count for this chunk
+		this.chunkCounts.set(chunk, newCount);
 	}
 }

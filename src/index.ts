@@ -84,6 +84,7 @@ function loop() {
 		timingDisplay.update(
 			time,
 			streaming.light.renderTime,
+			streaming.cull.renderTime,
 			cpuFrameTime,
 			stats,
 			streaming.cull.count,

@@ -15,6 +15,15 @@ struct VoxelData {
 @group(0) @binding(0) var<storage, read_write> voxels: array<VoxelData>;
 @group(0) @binding(1) var<uniform> chunk_offset: vec3<i32>;
 
+struct ChunkParams {
+    slice_offset: u32,
+    slice_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(2) var<uniform> chunk_params: ChunkParams;
+
 // Generate continuous SDF values instead of binary 0/1
 fn generate_sdf_noise(pos: vec3<u32>) -> f32 {
     // Convert to world-space coordinates by adding chunk offset
@@ -208,16 +217,32 @@ fn to1DWithBorder(id: vec3<u32>) -> u32 {
 }
 
 @compute @workgroup_size(4, 4, 4)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+fn main(@builtin(global_invocation_id) local_id: vec3<u32>) {
     // Generate one extra layer on each axis (0-256 instead of 0-255)
     let size = context.grid_size + 1u;
-    if (id.x >= size || id.y >= size || id.z >= size) {
+
+    if (chunk_params.slice_offset >= size) {
         return;
     }
 
-    let density = generate_sdf_noise(id);
-    //let color = generate_color(id, density);
+    if (
+        local_id.x >= size ||
+        local_id.y >= size ||
+        local_id.z >= chunk_params.slice_count
+    ) {
+        return;
+    }
+
+    let global_z = local_id.z + chunk_params.slice_offset;
+    if (global_z >= size) {
+        return;
+    }
+
+    let global_id = vec3<u32>(local_id.x, local_id.y, global_z);
+
+    let density = generate_sdf_noise(global_id);
+    // let color = generate_color(global_id, density);
     let color = 0xDDDDDDu;
 
-    voxels[to1DWithBorder(id)] = VoxelData(density, color);
+    voxels[to1DWithBorder(global_id)] = VoxelData(density, color);
 }

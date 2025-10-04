@@ -5,7 +5,7 @@ enable f16;
 
 // Input
 @group(0) @binding(1) var<storage, read> vertexCounts: array<u32>;
-@group(0) @binding(3) var<storage, read> density: array<u32>;
+@group(0) @binding(3) var<storage, read> combined_density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
 @group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
 
@@ -16,6 +16,53 @@ enable f16;
 struct AABB {
 	min: vec3<f32>,
 	max: vec3<f32>,
+}
+
+const NEIGHBOR_RADIUS: i32 = 1;
+const NEIGHBOR_DIAMETER: i32 = NEIGHBOR_RADIUS * 2 + 1;
+const NEIGHBOR_LAYER: i32 = NEIGHBOR_DIAMETER * NEIGHBOR_DIAMETER;
+
+struct DensitySample {
+	value: u32,
+	valid: bool,
+}
+
+fn chunk_block_count() -> u32 {
+	return context.grid_size / u32(COMPRESSION);
+}
+
+fn cells_per_chunk() -> u32 {
+	let block_count = chunk_block_count();
+	return block_count * block_count * block_count;
+}
+
+fn index_from_offset(offset: vec3<i32>) -> u32 {
+	let translated = offset + vec3<i32>(NEIGHBOR_RADIUS);
+	let index = translated.z * NEIGHBOR_LAYER + translated.y * NEIGHBOR_DIAMETER + translated.x;
+	return u32(index);
+}
+
+fn sample_combined_density(world_pos: vec3<f32>) -> DensitySample {
+	let block_size = f32(COMPRESSION);
+	let world_block_pos = vec3<i32>(floor(world_pos / block_size));
+	let chunk_block_origin = vec3<i32>(floor(vec3<f32>(chunk_world_pos) / block_size));
+	let relative = world_block_pos - chunk_block_origin;
+	let block_count_i = i32(chunk_block_count());
+	let offset = vec3<i32>(floor(vec3<f32>(relative) / f32(block_count_i)));
+
+	if (any(offset < vec3<i32>(-NEIGHBOR_RADIUS)) || any(offset > vec3<i32>(NEIGHBOR_RADIUS))) {
+		return DensitySample(0u, false);
+	}
+
+	let local = relative - offset * block_count_i;
+	if (any(local < vec3<i32>(0)) || any(local >= vec3<i32>(block_count_i))) {
+		return DensitySample(0u, false);
+	}
+
+	let local_index = to1DSmall(vec3<u32>(local));
+	let chunk_index = index_from_offset(offset);
+	let base = chunk_index * cells_per_chunk();
+	return DensitySample(combined_density[base + local_index], true);
 }
 
 fn get_block_aabb(block_pos: vec3<u32>) -> AABB {
@@ -54,13 +101,8 @@ fn test_aabb_frustum(aabb: AABB, view_proj: mat4x4<f32>) -> bool {
 }
 
 fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
-	// Extract camera position from inverse view matrix
 	let camera_pos = context.inverse_view[3].xyz;
-
-	// Get AABB for this block
 	let aabb = get_block_aabb(block_pos);
-
-	// Define the 8 corners of the block
 	let corners = array<vec3<f32>, 8>(
 		vec3<f32>(aabb.min.x, aabb.min.y, aabb.min.z),
 		vec3<f32>(aabb.max.x, aabb.min.y, aabb.min.z),
@@ -72,61 +114,40 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 		vec3<f32>(aabb.max.x, aabb.max.y, aabb.max.z)
 	);
 
-	// Step size of one block (8x8x8 units)
-	let step_size = 8.0;
-	let density_threshold = 2048u; // Half-filled blocks start occluding
-	let max_steps = 32u; // Reasonable limit for performance
+	let step_size = f32(COMPRESSION);
+	let density_threshold = 512u;
+	let max_steps = chunk_block_count();
 
-	var min_accumulated_density = 4294967295u; // Max u32 value
-
-	// Test occlusion for each corner
 	for (var corner_idx = 0u; corner_idx < 8u; corner_idx++) {
 		let corner = corners[corner_idx];
-
-		// Ray direction from corner to camera
 		let ray_dir = normalize(camera_pos - corner);
-
-		// Start from current corner position
 		var current_pos = corner;
 		var accumulated_density = 0u;
 
-		// Traverse toward camera
 		for (var step = 0u; step < max_steps; step++) {
-			// Move one block toward camera
 			current_pos += ray_dir * step_size;
-
-			// Convert world position to chunk-local block coordinates
-			let world_block_pos_f = floor(current_pos / 8.0);
-			let chunk_block_offset = vec3<f32>(chunk_world_pos) / 8.0;
-			let local_block_pos_f = world_block_pos_f - chunk_block_offset;
-
-			// Check bounds before converting to unsigned
-			let grid_size = context.grid_size / COMPRESSION;
-			if (any(local_block_pos_f < vec3<f32>(0.0)) || any(local_block_pos_f >= vec3<f32>(f32(grid_size)))) {
+			let sample = sample_combined_density(current_pos);
+			if (!sample.valid) {
 				break;
 			}
 
-			let local_block_pos = vec3<u32>(local_block_pos_f);
+			accumulated_density += sample.value;
+			if (accumulated_density >= density_threshold) {
+				break;
+			}
 
-			// Get density value for this block
-			let block_index = to1DSmall(local_block_pos);
-			let block_density = density[block_index];
-
-			accumulated_density += block_density;
-
-			// If we're close to camera, stop checking
 			let distance_to_camera = length(camera_pos - current_pos);
 			if (distance_to_camera < step_size) {
 				break;
 			}
 		}
 
-		// Track minimum density across all corners
-		min_accumulated_density = min(min_accumulated_density, accumulated_density);
+		if (accumulated_density < density_threshold) {
+			return false;
+		}
 	}
 
-	// Only cull if ALL corners are sufficiently occluded
-	return min_accumulated_density >= density_threshold;
+	return true;
 }
 
 @compute @workgroup_size(4, 4, 4)

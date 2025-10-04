@@ -1,5 +1,5 @@
 import {Chunk} from './chunk';
-import {camera, device, gpu, gridSize} from '../index';
+import {camera, compression, device, gpu, gridSize} from '../index';
 import {Cull} from '../pipeline/rendering/cull';
 import {Mesh} from '../pipeline/generation/mesh';
 import {Block} from '../pipeline/rendering/block';
@@ -8,19 +8,35 @@ import {Noise} from '../pipeline/generation/noise';
 import {VoxelEditorHandler} from '../ui/voxel-editor';
 import {VoxelEditor} from '../pipeline/generation/voxel_editor';
 
+type GenerationStage = 'create' | 'noise' | 'mesh' | 'light' | 'finalize';
+
+interface GenerationTask {
+	index: number;
+	position: number[];
+	stage: GenerationStage;
+	chunk?: Chunk;
+	progress: number;
+}
+
 export class Streaming {
 	grid = new Map<number, Chunk>();
 	generationQueue: number[][] = []; // Queue of chunk positions to generate
-	isGenerating = false;
+	pendingGenerations: GenerationTask[] = [];
+	queuedChunks = new Set<number>();
+	inProgressGenerations = new Set<number>();
+	maxConcurrentGenerations = 1;
+	noiseSlicesPerFrame = 1;
+	meshSlicesPerFrame = 1;
+	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
 	noise = new Noise();
+	cull = new Cull();
 	light = new Light();
 	block = new Block();
 	mesh = new Mesh();
-	cull = new Cull();
 
-	voxelEditor = new VoxelEditor(this.block, this.mesh, this.light);
+	voxelEditor = new VoxelEditor(this.block, this.mesh, this.light, this.cull);
 	voxelEditorHandler = new VoxelEditorHandler(gpu, this.voxelEditor);
 
 	nextChunkId = 1;
@@ -60,21 +76,24 @@ export class Streaming {
 
 	getNeighborChunks(chunk: Chunk): Chunk[] {
 		const neighbors: Chunk[] = [];
-		const offsets = [
-			[-1, 0, 0], [1, 0, 0],
-			[0, -1, 0], [0, 1, 0],
-			[0, 0, -1], [0, 0, 1]
-		];
 
-		for (const offset of offsets) {
-			const neighborPos = [
-				chunk.position[0] + offset[0],
-				chunk.position[1] + offset[1],
-				chunk.position[2] + offset[2]
-			];
-			const neighbor = this.getChunkAt(neighborPos);
-			if (neighbor) {
-				neighbors.push(neighbor);
+		for (let dx = -1; dx <= 1; dx++) {
+			for (let dy = -1; dy <= 1; dy++) {
+				for (let dz = -1; dz <= 1; dz++) {
+					if (dx === 0 && dy === 0 && dz === 0) {
+						continue;
+					}
+
+					const neighborPos = [
+						chunk.position[0] + dx,
+						chunk.position[1] + dy,
+						chunk.position[2] + dz,
+					];
+					const neighbor = this.getChunkAt(neighborPos);
+					if (neighbor) {
+						neighbors.push(neighbor);
+					}
+				}
 			}
 		}
 
@@ -100,48 +119,8 @@ export class Streaming {
 		this.queueChunksAroundPosition(playerChunkPos);
 	}
 
-	generateChunk(position: number[]): Chunk {
-		const chunkId = this.nextChunkId++;
-		const newChunk = new Chunk(chunkId, position);
-
-		// Register chunk with all pipelines
-		this.noise.registerChunk(newChunk);
-		this.mesh.registerChunk(newChunk);
-		this.cull.registerChunk(newChunk);
-		this.light.registerChunk(newChunk);
-		this.block.registerChunk(newChunk);
-		this.voxelEditor.registerChunk(newChunk);
-
-		// Generate chunk data
-		const encoder = device.createCommandEncoder();
-		this.noise.update(encoder, newChunk);
-		device.queue.submit([encoder.finish()]);
-
-		const meshEncoder = device.createCommandEncoder();
-		this.mesh.update(meshEncoder, newChunk);
-		this.light.update(meshEncoder, newChunk, (c) => this.getNeighborChunks(c));
-		// Bake lighting immediately to show initial results (will be re-baked when light stabilizes)
-		this.light.bakeVertexLighting(meshEncoder, newChunk, (c) => this.getNeighborChunks(c));
-		device.queue.submit([meshEncoder.finish()]);
-
-		this.mesh.afterUpdate();
-		this.light.afterUpdate();
-
-		// Add to grid
-		this.grid.set(this.map3D1D(position), newChunk);
-
-		// Invalidate neighboring chunks' lighting so light propagates across boundaries
-		const neighbors = this.getNeighborChunks(newChunk);
-		for (const neighbor of neighbors) {
-			this.light.invalidate(neighbor);
-		}
-
-		return newChunk;
-	}
-
 	queueChunksAroundPosition(centerPos: number[]) {
-		const renderDistance = 0.8; // Same as updateActiveChunks
-		const searchRadius = Math.ceil(renderDistance); // Integer radius to search
+		const searchRadius = Math.ceil(this.renderDistance); // Integer radius to search
 
 		// Camera position in world space
 		const camX = camera.position[0];
@@ -165,12 +144,17 @@ export class Streaming {
 				) / gridSize;
 
 				// Only queue chunks within circular distance
-				if (distance <= renderDistance) {
+				if (distance <= this.renderDistance) {
 					const chunkIndex = this.map3D1D(chunkPos);
 
-					// Only queue if chunk doesn't exist
-					if (!this.grid.has(chunkIndex)) {
+					// Only queue if chunk isn't present or already scheduled
+					if (
+						!this.grid.has(chunkIndex) &&
+						!this.inProgressGenerations.has(chunkIndex) &&
+						!this.queuedChunks.has(chunkIndex)
+					) {
 						this.generationQueue.push(chunkPos);
+						this.queuedChunks.add(chunkIndex);
 					}
 				}
 			}
@@ -178,27 +162,18 @@ export class Streaming {
 	}
 
 	processGenerationQueue(): boolean {
-		if (this.isGenerating || this.generationQueue.length === 0) {
+		this.fillGenerationTasks();
+		if (this.pendingGenerations.length === 0) {
 			return false;
 		}
 
-		this.isGenerating = true;
-
-		// Generate one chunk per frame to avoid blocking
-		const position = this.generationQueue.shift()!;
-		const chunkIndex = this.map3D1D(position);
-
-		let generated = false;
-
-		// Double-check it wasn't generated by another call
-		if (!this.grid.has(chunkIndex)) {
-			console.log('Generating chunk:', position);
-			this.generateChunk(position);
-			generated = true;
+		const currentTask = this.pendingGenerations[0];
+		const completed = this.advanceGeneration(currentTask);
+		const task = this.pendingGenerations.shift()!;
+		if (!completed) {
+			this.pendingGenerations.push(task);
 		}
-
-		this.isGenerating = false;
-		return generated;
+		return completed;
 	}
 
 	update(updateEncoder: GPUCommandEncoder) {
@@ -216,6 +191,8 @@ export class Streaming {
 		// Update active chunks based on new position
 		this.updateActiveChunks(center);
 
+		this.cull.setPlayerChunk(center);
+
 		// Queue new chunks that need to be generated
 		this.queueChunksAroundPosition(center);
 
@@ -224,7 +201,7 @@ export class Streaming {
 
 		for (const chunk of chunksArray) {
 			this.light.update(updateEncoder, chunk, (c) => this.getNeighborChunks(c));
-			this.cull.update(updateEncoder, chunk);
+			this.cull.update(updateEncoder, chunk, (c) => this.getNeighborChunks(c));
 		}
 
 		// Render all chunks at once
@@ -234,8 +211,7 @@ export class Streaming {
 	updateActiveChunks(center: number[]) {
 		this.activeChunks.clear();
 
-		const renderDistance = 0.8;
-		const searchRadius = Math.ceil(renderDistance); // Integer radius to search
+		const searchRadius = Math.ceil(this.renderDistance); // Integer radius to search
 
 		// Camera position in world space
 		const camX = camera.position[0];
@@ -259,7 +235,7 @@ export class Streaming {
 				) / gridSize;
 
 				// Only activate chunks within circular distance
-				if (distance <= renderDistance) {
+				if (distance <= this.renderDistance) {
 					const chunkIndex = this.map3D1D(chunkPos);
 					const chunk = this.grid.get(chunkIndex);
 
@@ -307,9 +283,176 @@ export class Streaming {
 		}
 	}
 
+	private initializeChunk(position: number[]): Chunk {
+		const chunkId = this.nextChunkId++;
+		const chunk = new Chunk(chunkId, position);
+
+		this.noise.registerChunk(chunk);
+		this.mesh.registerChunk(chunk);
+		this.cull.registerChunk(chunk);
+		this.light.registerChunk(chunk);
+		this.block.registerChunk(chunk);
+		this.voxelEditor.registerChunk(chunk);
+
+		return chunk;
+	}
+
+	private fillGenerationTasks() {
+		// Sort generation queue by distance to camera and view direction (closest and in-view first)
+		if (this.generationQueue.length > 0) {
+			const camX = camera.position[0];
+			const camZ = camera.position[2];
+			// Calculate view direction from yaw
+			const viewDirX = Math.sin(camera.yaw);
+			const viewDirZ = Math.cos(camera.yaw);
+
+			this.generationQueue.sort((a, b) => {
+				const aCenterX = (a[0] + 0.5) * gridSize;
+				const aCenterZ = (a[2] + 0.5) * gridSize;
+				const aVecX = aCenterX - camX;
+				const aVecZ = aCenterZ - camZ;
+				const aDist = Math.sqrt(aVecX * aVecX + aVecZ * aVecZ);
+				const aDot = (aVecX * viewDirX + aVecZ * viewDirZ) / (aDist || 1);
+
+				const bCenterX = (b[0] + 0.5) * gridSize;
+				const bCenterZ = (b[2] + 0.5) * gridSize;
+				const bVecX = bCenterX - camX;
+				const bVecZ = bCenterZ - camZ;
+				const bDist = Math.sqrt(bVecX * bVecX + bVecZ * bVecZ);
+				const bDot = (bVecX * viewDirX + bVecZ * viewDirZ) / (bDist || 1);
+
+				// Prioritize chunks in view direction (higher dot product)
+				// then by distance (closer is better)
+				const aScore = aDot - aDist * 0.1;
+				const bScore = bDot - bDist * 0.1;
+
+				return bScore - aScore;
+			});
+		}
+
+		while (
+			this.pendingGenerations.length < this.maxConcurrentGenerations &&
+			this.generationQueue.length > 0
+			) {
+			const position = this.generationQueue.shift()!;
+			const chunkIndex = this.map3D1D(position);
+			this.queuedChunks.delete(chunkIndex);
+
+			if (this.grid.has(chunkIndex) || this.inProgressGenerations.has(chunkIndex)) {
+				continue;
+			}
+
+			this.inProgressGenerations.add(chunkIndex);
+			this.pendingGenerations.push({
+				index: chunkIndex,
+				position: [...position],
+				stage: 'create',
+				progress: 0,
+			});
+		}
+	}
+
+	private advanceGeneration(task: GenerationTask): boolean {
+		switch (task.stage) {
+			case 'create': {
+				const chunk = this.initializeChunk(task.position);
+				task.chunk = chunk;
+				console.log('Generating chunk:', task.position);
+				task.stage = 'noise';
+				task.progress = 0;
+				return false;
+			}
+			case 'noise': {
+				const chunk = task.chunk;
+				if (!chunk) {
+					throw new Error('Chunk missing for noise stage');
+				}
+				const totalSlices = gridSize + 1;
+				const processed = task.progress ?? 0;
+				const remaining = Math.max(0, totalSlices - processed);
+				const sliceCount = Math.min(this.noiseSlicesPerFrame, remaining);
+				if (sliceCount <= 0) {
+					task.stage = 'mesh';
+					task.progress = 0;
+					return false;
+				}
+				const encoder = device.createCommandEncoder();
+				this.noise.update(encoder, chunk, processed, sliceCount);
+				device.queue.submit([encoder.finish()]);
+				task.progress = processed + sliceCount;
+				if (task.progress >= totalSlices) {
+					task.stage = 'mesh';
+					task.progress = 0;
+				}
+				return false;
+			}
+			case 'mesh': {
+				const chunk = task.chunk;
+				if (!chunk) {
+					throw new Error('Chunk missing for mesh stage');
+				}
+				const totalSlices = gridSize / compression;
+				const processed = task.progress ?? 0;
+				const remaining = Math.max(0, totalSlices - processed);
+				const sliceCount = Math.min(this.meshSlicesPerFrame, remaining);
+				if (sliceCount <= 0) {
+					task.stage = 'light';
+					task.progress = 0;
+					return false;
+				}
+				const minZ = processed * compression;
+				const maxZ = Math.min(gridSize, (processed + sliceCount) * compression);
+				const encoder = device.createCommandEncoder();
+				this.mesh.update(encoder, chunk, {
+					min: [0, 0, minZ],
+					max: [gridSize, gridSize, maxZ],
+				});
+				device.queue.submit([encoder.finish()]);
+				task.progress = processed + sliceCount;
+				if (task.progress >= totalSlices) {
+					task.stage = 'light';
+					task.progress = 0;
+				}
+				return false;
+			}
+			case 'light': {
+				const chunk = task.chunk;
+				if (!chunk) {
+					throw new Error('Chunk missing for light stage');
+				}
+				const encoder = device.createCommandEncoder();
+				// Run multiple light propagation iterations to fully stabilize lighting
+				for (let i = 0; i < 32; i++) {
+					this.light.update(encoder, chunk, (c) => this.getNeighborChunks(c));
+				}
+				this.light.bakeVertexLighting(encoder, chunk, (c) => this.getNeighborChunks(c));
+				device.queue.submit([encoder.finish()]);
+				task.stage = 'finalize';
+				return false;
+			}
+			case 'finalize': {
+				const chunk = task.chunk;
+				if (!chunk) {
+					throw new Error('Chunk missing for finalize stage');
+				}
+				this.grid.set(task.index, chunk);
+				const neighbors = this.getNeighborChunks(chunk);
+				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
+				for (const neighbor of neighbors) {
+					this.light.invalidate(neighbor);
+				}
+				this.inProgressGenerations.delete(task.index);
+				return true;
+			}
+			default:
+				return false;
+		}
+	}
+
 	private async cleanupChunks(chunks: Chunk[]) {
 
 		for (const chunk of chunks) {
+			const neighbors = this.getNeighborChunks(chunk);
 			const chunkIndex = this.map3D1D(chunk.position);
 			this.grid.delete(chunkIndex);
 
@@ -317,6 +460,7 @@ export class Streaming {
 			this.noise.unregisterChunk(chunk);
 			this.mesh.unregisterChunk(chunk);
 			await this.cull.unregisterChunk(chunk);
+			this.cull.invalidateChunks(neighbors);
 			this.light.unregisterChunk(chunk);
 			this.block.unregisterChunk(chunk);
 			this.voxelEditor.unregisterChunk(chunk);

@@ -22,6 +22,7 @@ export class Light {
 	// Per-chunk simulation state
 	private chunkIterationCounts = new Map<Chunk, number>();
 	private chunkNeedsUpdate = new Map<Chunk, boolean>();
+	private chunkNeedsRebake = new Map<Chunk, boolean>();
 	private maxIterations = 16; // Number of iterations to propagate light
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 	private readonly lightSegmentSize: number;
@@ -109,9 +110,11 @@ export class Light {
 		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
 		this.chunkIterationCounts.set(chunk, iterationCount);
 
-		// Bake lighting into vertex colors when light stabilizes
-		if (iterationCount >= this.maxIterations * 2) {
+		// Bake lighting into vertex colors when light stabilizes or when forced
+		const needsRebake = this.chunkNeedsRebake.get(chunk) ?? false;
+		if (iterationCount >= this.maxIterations * 2 || needsRebake) {
 			this.chunkNeedsUpdate.set(chunk, false);
+			this.chunkNeedsRebake.set(chunk, false);
 			this.bakeVertexLighting(encoder, chunk, getNeighborChunks);
 		}
 	}
@@ -134,10 +137,12 @@ export class Light {
 		pass.setBindGroup(1, lightBindGroup);
 		pass.setBindGroup(2, this.vertexLightContextBindGroups.get(chunk)!);
 
-		// Dispatch for all vertices (64 vertices per workgroup)
+		// Dispatch for all potential vertices (shader will skip empty meshlets via vertexCounts)
 		const sSize = gridSize / compression;
-		const maxVertices = sSize * sSize * sSize * 1536;
-		const workgroups = Math.ceil(maxVertices / 64);
+		const meshletCount = sSize * sSize * sSize;
+		const verticesPerMeshlet = 1536;
+		const totalVertices = meshletCount * verticesPerMeshlet;
+		const workgroups = Math.ceil(totalVertices / 64);
 
 		// Split across X and Y dimensions to stay within limits (max 65535 per dimension)
 		const maxWorkgroupsPerDim = 65535;
@@ -153,11 +158,14 @@ export class Light {
 		if (chunk) {
 			this.chunkNeedsUpdate.set(chunk, true);
 			this.chunkIterationCounts.set(chunk, 0);
+			// Force rebake on next frame to avoid showing stale lighting
+			this.chunkNeedsRebake.set(chunk, true);
 		} else {
 			// Invalidate all chunks
 			for (const c of this.chunkNeedsUpdate.keys()) {
 				this.chunkNeedsUpdate.set(c, true);
 				this.chunkIterationCounts.set(c, 0);
+				this.chunkNeedsRebake.set(c, true);
 			}
 		}
 	}
@@ -293,6 +301,7 @@ export class Light {
 		this.chunkWorldPosBuffers.delete(chunk);
 		this.chunkNeedsUpdate.delete(chunk);
 		this.chunkIterationCounts.delete(chunk);
+		this.chunkNeedsRebake.delete(chunk);
 	}
 
 	private initBuffers() {
@@ -444,6 +453,10 @@ export class Light {
 				{
 					binding: 3,
 					resource: {buffer: chunk.colors},  // Write lit colors
+				},
+				{
+					binding: 4,
+					resource: {buffer: chunk.vertexCounts},  // Vertex counts per meshlet
 				},
 			],
 		});
