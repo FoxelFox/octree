@@ -298,7 +298,7 @@ const TRIANGLE_TABLE_DATA = [
 ];
 
 // Pack edge table into vec4<u32> format for uniform buffer (16-byte alignment)
-function packEdgeTable(): Uint32Array {
+function packEdgeTable(): ArrayBufferView<ArrayBuffer> {
 	const packed = new Uint32Array(256); // 64 vec4s * 4 components = 256 values
 	for (let i = 0; i < EDGE_TABLE_DATA.length; i++) {
 		packed[i] = EDGE_TABLE_DATA[i];
@@ -307,7 +307,7 @@ function packEdgeTable(): Uint32Array {
 }
 
 // Pack triangle table into vec4<i32> format for uniform buffer (16-byte alignment)  
-function packTriangleTable(): Int32Array {
+function packTriangleTable(): ArrayBufferView<ArrayBuffer> {
 	const packed = new Int32Array(4096); // 1024 vec4s * 4 components = 4096 values
 	for (let i = 0; i < TRIANGLE_TABLE_DATA.length; i++) {
 		packed[i] = TRIANGLE_TABLE_DATA[i];
@@ -316,5 +316,5 @@ function packTriangleTable(): Int32Array {
 }
 
 // Export packed tables for GPU use
-export const EDGE_TABLE = packEdgeTable();
-export const TRIANGLE_TABLE = packTriangleTable();
+export const EDGE_TABLE: ArrayBufferView<ArrayBuffer> = packEdgeTable();
+export const TRIANGLE_TABLE: ArrayBufferView<ArrayBuffer> = packTriangleTable();

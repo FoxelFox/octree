@@ -276,10 +276,14 @@ export class Streaming {
 		this.light.afterUpdate();
 
 		// Now that GPU commands are submitted, cleanup chunks that are no longer needed
+		// Do this asynchronously without blocking the next frame
 		if (this.pendingCleanup.length > 0) {
 			const chunksToCleanup = this.pendingCleanup;
 			this.pendingCleanup = [];
-			await this.cleanupChunks(chunksToCleanup);
+			// Fire and forget - don't await
+			this.cleanupChunks(chunksToCleanup).catch((error) => {
+				console.warn('Error during chunk cleanup:', error);
+			});
 		}
 	}
 
