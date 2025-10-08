@@ -29,6 +29,7 @@ struct VoxelData {
 @group(0) @binding(4) var<storage, read_write> materialColors: array<u32>;
 @group(0) @binding(5) var<storage, read_write> commands: array<Command>;
 @group(0) @binding(6) var<storage, read_write> density: array<u32>;
+@group(0) @binding(7) var<storage, read_write> globalVertexCounter: atomic<u32>;
 
 
 // Marching cubes edge table uniform buffer (vec4<u32> for 16-byte alignment)
@@ -182,6 +183,10 @@ fn interpolateNormal(n1: vec3<f32>, n2: vec3<f32>, val1: f32, val2: f32) -> vec3
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	var vertexCount = 0u;
+	var meshletFirstVertex = 0u;
+	var localPositions: array<vec3<f32>, 1536>;
+	var localNormals: array<vec3<f32>, 1536>;
+	var localColors: array<u32, 1536>;
 	var command = Command();
 	let actualId = id + offset;
 	let sSize = context.grid_size / COMPRESSION;
@@ -292,42 +297,44 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 						break;
 					}
 
-					// Calculate global vertex indices
-					let baseVertexIndex = index * 1536u + vertexCount;
+					// Store triangle vertices locally until we reserve contiguous space
+					if (edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
+						if (vertexCount + 3u <= 1536u) {
+							let v1 = vertexList[edge1];
+							let v2 = vertexList[edge2];
+							let v3 = vertexList[edge3];
 
-					// Ensure we don't exceed vertex buffer capacity
-					if (vertexCount + 3 <= 1536 && edge1 >= 0 && edge2 >= 0 && edge3 >= 0) {
-						let v1 = vertexList[edge1];
-						let v2 = vertexList[edge2];
-						let v3 = vertexList[edge3];
+							let n1 = normalList[edge1];
+							let n2 = normalList[edge2];
+							let n3 = normalList[edge3];
 
-						let n1 = normalList[edge1];
-						let n2 = normalList[edge2];
-						let n3 = normalList[edge3];
+							let c1 = colorList[edge1];
+							let c2 = colorList[edge2];
+							let c3 = colorList[edge3];
 
-						let c1 = colorList[edge1];
-						let c2 = colorList[edge2];
-						let c3 = colorList[edge3];
+							// Apply chunk world position offset to vertices
+							let v1_world = v1 + vec3<f32>(chunk_world_pos);
+							let v2_world = v2 + vec3<f32>(chunk_world_pos);
+							let v3_world = v3 + vec3<f32>(chunk_world_pos);
 
-						// Apply chunk world position offset to vertices
-						let v1_world = v1 + vec3<f32>(chunk_world_pos);
-						let v2_world = v2 + vec3<f32>(chunk_world_pos);
-						let v3_world = v3 + vec3<f32>(chunk_world_pos);
+							let base = vertexCount;
+							localPositions[base] = v1_world;
+							localPositions[base + 1u] = v2_world;
+							localPositions[base + 2u] = v3_world;
 
-						vertices[baseVertexIndex] = vec4<f16>(vec3<f16>(v1_world), 1.0h);
-						vertices[baseVertexIndex + 1] = vec4<f16>(vec3<f16>(v2_world), 1.0h);
-						vertices[baseVertexIndex + 2] = vec4<f16>(vec3<f16>(v3_world), 1.0h);
+							localNormals[base] = n1;
+							localNormals[base + 1u] = n2;
+							localNormals[base + 2u] = n3;
 
-						normals[baseVertexIndex] = vec3<f16>(n1);
-						normals[baseVertexIndex + 1] = vec3<f16>(n2);
-						normals[baseVertexIndex + 2] = vec3<f16>(n3);
+							localColors[base] = c1;
+							localColors[base + 1u] = c2;
+							localColors[base + 2u] = c3;
 
-						materialColors[baseVertexIndex] = c1;
-						materialColors[baseVertexIndex + 1] = c2;
-						materialColors[baseVertexIndex + 2] = c3;
-
-						vertexCount += 3u;
-					} else if (edge1 < 0 || edge2 < 0 || edge3 < 0) {
+							vertexCount += 3u;
+						} else {
+							break; // Meshlet reached maximum vertex capacity
+						}
+					} else {
 						break; // End of triangles for this configuration
 					}
 				}
@@ -335,12 +342,35 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		}
 	}
 
+	if (vertexCount > 0u) {
+		let baseVertexIndex = atomicAdd(&globalVertexCounter, vertexCount);
+		let capacity = arrayLength(&vertices);
+		if (baseVertexIndex + vertexCount > capacity) {
+			let safeCount = capacity - baseVertexIndex;
+			let overflow = baseVertexIndex + vertexCount - capacity;
+			// Balance the global counter back down to the actual written range
+			_ = atomicAdd(&globalVertexCounter, 0u - overflow);
+			vertexCount = safeCount;
+		}
+
+		meshletFirstVertex = baseVertexIndex;
+		for (var i = 0u; i < vertexCount; i++) {
+			vertices[baseVertexIndex + i] = vec4<f16>(vec3<f16>(localPositions[i]), 1.0h);
+			normals[baseVertexIndex + i] = vec3<f16>(localNormals[i]);
+			materialColors[baseVertexIndex + i] = localColors[i];
+		}
+	}
+
+	if (vertexCount == 0u) {
+		meshletFirstVertex = 0u;
+	}
+
 	vertexCounts[index] = vertexCount;
 
 	command.vertexCount = vertexCount;
 	command.instanceCount = 1u;
-	command.firstVertex = 0u;
-	command.firstInstance = index;
+	command.firstVertex = meshletFirstVertex;
+	command.firstInstance = 0u;
 	commands[index] = command;
 
 }

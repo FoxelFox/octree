@@ -2,6 +2,13 @@ enable f16;
 
 #import "../../data/context.wgsl"
 
+struct Command {
+	vertexCount: u32,
+	instanceCount: u32,
+	firstVertex: u32,
+	firstInstance: u32,
+}
+
 // Input: vertex data
 @group(0) @binding(0) var<storage, read> vertices: array<vec4<f16>>;
 
@@ -16,6 +23,9 @@ enable f16;
 
 // Vertex counts per meshlet
 @group(0) @binding(4) var<storage, read> vertexCounts: array<u32>;
+
+// Indirect draw commands (provides firstVertex offsets)
+@group(0) @binding(5) var<storage, read> commands: array<Command>;
 
 // Light data (chunk + 6 neighbors packed sequentially)
 @group(1) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
@@ -192,11 +202,17 @@ fn main(
     let vertex_in_meshlet = linear_index % VERTICES_PER_MESHLET;
 
     // Bounds check: ensure we don't exceed meshlet count
-    if (meshlet_index >= arrayLength(&vertexCounts)) {
+    if (meshlet_index >= arrayLength(&vertexCounts) || meshlet_index >= arrayLength(&commands)) {
         return;
     }
 
-    let vertex_count = vertexCounts[meshlet_index];
+    let declared_vertex_count = vertexCounts[meshlet_index];
+    let command = commands[meshlet_index];
+    let vertex_count = min(declared_vertex_count, command.vertexCount);
+
+    if (vertex_count == 0u) {
+        return;
+    }
 
     // Early exit if this vertex slot is beyond the meshlet's actual vertex count
     if (vertex_in_meshlet >= vertex_count) {
@@ -204,7 +220,10 @@ fn main(
     }
 
     // Calculate actual vertex index in the vertex buffer
-    let vertex_index = meshlet_index * VERTICES_PER_MESHLET + vertex_in_meshlet;
+    let vertex_index = command.firstVertex + vertex_in_meshlet;
+    if (vertex_index >= arrayLength(&vertices) || vertex_index >= arrayLength(&normals) || vertex_index >= arrayLength(&materialColors)) {
+        return;
+    }
 
     // Get vertex position in world space
     let vertex = vertices[vertex_index];

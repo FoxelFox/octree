@@ -11,6 +11,14 @@ export class Mesh {
 	triangleTableBuffer: GPUBuffer;
 	timer: RenderTimer;
 
+	// Staging buffers for mesh generation (reused across all chunks)
+	stagingVertices: GPUBuffer;
+	stagingNormals: GPUBuffer;
+	stagingMaterialColors: GPUBuffer;
+	vertexCounter: GPUBuffer;
+	vertexCounterReadback: GPUBuffer;
+	maxVertices: number;
+
 	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
@@ -18,10 +26,48 @@ export class Mesh {
 	constructor() {
 		this.timer = new RenderTimer('mesh');
 
+		// Calculate max vertices for staging buffers
+		const sSize = gridSize / compression;
+		const sSize3 = sSize * sSize * sSize;
+		this.maxVertices = sSize3 * 1536;
+
 		this.offsetBuffer = device.createBuffer({
 			label: 'Mesh Offset Buffer',
 			size: 16, // vec3<u32> + padding = 16 bytes
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Create staging buffers for mesh generation (reused across all chunks)
+		this.stagingVertices = device.createBuffer({
+			label: 'Mesh Staging Vertices',
+			size: 8 * this.maxVertices, // vec4<f16> = 8 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.stagingNormals = device.createBuffer({
+			label: 'Mesh Staging Normals',
+			size: 8 * this.maxVertices, // vec3<f16> = 8 bytes each (with padding)
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		this.stagingMaterialColors = device.createBuffer({
+			label: 'Mesh Staging Material Colors',
+			size: 4 * this.maxVertices, // u32 = 4 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+		});
+
+		// Atomic counter for vertex allocation
+		this.vertexCounter = device.createBuffer({
+			label: 'Mesh Vertex Counter',
+			size: 4, // atomic<u32> = 4 bytes
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		});
+
+		// Readback buffer for vertex counter
+		this.vertexCounterReadback = device.createBuffer({
+			label: 'Mesh Vertex Counter Readback',
+			size: 4,
+			usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
 		});
 
 		// Create and initialize lookup table buffers
@@ -62,8 +108,14 @@ export class Mesh {
 	update(
 		encoder: GPUCommandEncoder,
 		chunk: Chunk,
-		bounds?: { min: [number, number, number]; max: [number, number, number] }
+		bounds?: { min: [number, number, number]; max: [number, number, number] },
+		resetCounter: boolean = true
 	) {
+		// Reset vertex counter only when starting a new mesh generation
+		if (resetCounter) {
+			encoder.clearBuffer(this.vertexCounter, 0, 4);
+		}
+
 		if (bounds) {
 			// Calculate mesh chunk bounds in compressed grid space
 			const sSize = gridSize / compression;
@@ -124,10 +176,167 @@ export class Mesh {
 		}
 
 		this.timer.resolveTimestamps(encoder);
+
+		// Copy vertex counter for readback
+		encoder.copyBufferToBuffer(
+			this.vertexCounter,
+			0,
+			this.vertexCounterReadback,
+			0,
+			4
+		);
+
+		// Defer the efficient copy to after command encoder submission
+		// We'll read the actual vertex count and copy only what's needed
+		this.pendingChunkCopy = { chunk, encoder };
 	}
+
+	async finalizeMeshGeneration(): Promise<{ chunk: Chunk; buffersResized: boolean } | null> {
+		if (!this.pendingChunkCopy) return null;
+
+		const { chunk } = this.pendingChunkCopy;
+		this.pendingChunkCopy = null;
+
+		// Read back the actual vertex count
+		await this.vertexCounterReadback.mapAsync(GPUMapMode.READ);
+		const counterData = new Uint32Array(this.vertexCounterReadback.getMappedRange());
+		const actualVertexCount = counterData[0];
+		this.vertexCounterReadback.unmap();
+
+		console.log(`Chunk ${chunk.id}: actualVertexCount = ${actualVertexCount} (staging max: ${this.maxVertices})`);
+
+		if (actualVertexCount === 0) {
+			console.warn(`Chunk ${chunk.id}: No vertices generated!`);
+			return { chunk, buffersResized: false };
+		}
+
+		if (actualVertexCount > this.maxVertices) {
+			console.error(`CRITICAL: Vertex count ${actualVertexCount} exceeds staging buffer capacity ${this.maxVertices}!`);
+			console.error(`This means vertices were written out of bounds and data is corrupted!`);
+		}
+
+		// Ensure chunk buffers are sized appropriately (with some headroom)
+		const targetSize = Math.ceil(actualVertexCount * 1.2);
+		console.log(`Target buffer size: ${targetSize} vertices (${targetSize * 8} bytes for vertices)`);
+		const buffersResized = this.ensureChunkBufferSize(chunk, targetSize);
+		console.log(`Buffers resized: ${buffersResized}, new size: ${chunk.vertices.size} bytes`);
+
+		// Create new encoder for the copy operation
+		const copyEncoder = device.createCommandEncoder({
+			label: 'Mesh Copy'
+		});
+
+		// Copy only the used portion of staging buffers
+		const verticesBytes = actualVertexCount * 8;
+		const normalsBytes = actualVertexCount * 8;
+		const colorsBytes = actualVertexCount * 4;
+
+		console.log(`Copying ${verticesBytes} bytes of vertices (chunk buffer size: ${chunk.vertices.size})`);
+
+		// Ensure we don't exceed buffer sizes
+		if (verticesBytes > chunk.vertices.size) {
+			console.error(`Vertices overflow! Need ${verticesBytes}, have ${chunk.vertices.size}`);
+		}
+		if (normalsBytes > chunk.normals.size) {
+			console.error(`Normals overflow! Need ${normalsBytes}, have ${chunk.normals.size}`);
+		}
+		if (colorsBytes > chunk.colors.size) {
+			console.error(`Colors overflow! Need ${colorsBytes}, have ${chunk.colors.size}`);
+		}
+
+		copyEncoder.copyBufferToBuffer(
+			this.stagingVertices,
+			0,
+			chunk.vertices,
+			0,
+			Math.min(verticesBytes, chunk.vertices.size)
+		);
+
+		copyEncoder.copyBufferToBuffer(
+			this.stagingNormals,
+			0,
+			chunk.normals,
+			0,
+			Math.min(normalsBytes, chunk.normals.size)
+		);
+
+		copyEncoder.copyBufferToBuffer(
+			this.stagingMaterialColors,
+			0,
+			chunk.materialColors,
+			0,
+			Math.min(colorsBytes, chunk.materialColors.size)
+		);
+
+		copyEncoder.copyBufferToBuffer(
+			this.stagingMaterialColors,
+			0,
+			chunk.colors,
+			0,
+			Math.min(colorsBytes, chunk.colors.size)
+		);
+
+		device.queue.submit([copyEncoder.finish()]);
+
+		return { chunk, buffersResized };
+	}
+
+	private pendingChunkCopy: { chunk: Chunk; encoder: GPUCommandEncoder } | null = null;
 
 	afterUpdate() {
 		this.timer.readTimestamps();
+	}
+
+	ensureChunkBufferSize(chunk: Chunk, vertexCount: number): boolean {
+		const requiredVerticesSize = vertexCount * 8;
+		const requiredNormalsSize = vertexCount * 8;
+		const requiredColorsSize = vertexCount * 4;
+
+		// Check if buffers need resizing (grow by 1.5x to avoid frequent resizes)
+		const needsResize =
+			chunk.vertices.size < requiredVerticesSize ||
+			chunk.normals.size < requiredNormalsSize ||
+			chunk.materialColors.size < requiredColorsSize ||
+			chunk.colors.size < requiredColorsSize;
+
+		if (needsResize) {
+			const newVertexCount = Math.ceil(vertexCount * 1.5);
+			const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
+
+			// Destroy old buffers
+			chunk.vertices.destroy();
+			chunk.normals.destroy();
+			chunk.materialColors.destroy();
+			chunk.colors.destroy();
+
+			// Create new larger buffers
+			chunk.vertices = device.createBuffer({
+				label: `${chunkLabel} Vertices`,
+				size: newVertexCount * 8,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+			});
+
+			chunk.normals = device.createBuffer({
+				label: `${chunkLabel} Normals`,
+				size: newVertexCount * 8,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+			});
+
+			chunk.materialColors = device.createBuffer({
+				label: `${chunkLabel} Material Colors`,
+				size: newVertexCount * 4,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+			});
+
+			chunk.colors = device.createBuffer({
+				label: `${chunkLabel} Lit Colors`,
+				size: newVertexCount * 4,
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+			});
+
+			return true; // Buffers were resized
+		}
+		return false; // No resize needed
 	}
 
 	registerChunk(chunk: Chunk) {
@@ -146,15 +355,15 @@ export class Mesh {
 				},
 				{
 					binding: 2,
-					resource: {buffer: chunk.vertices}, // Output
+					resource: {buffer: this.stagingVertices}, // Output (staging)
 				},
 				{
 					binding: 3,
-					resource: {buffer: chunk.normals}, // Output
+					resource: {buffer: this.stagingNormals}, // Output (staging)
 				},
 				{
 					binding: 4,
-					resource: {buffer: chunk.materialColors}, // Output
+					resource: {buffer: this.stagingMaterialColors}, // Output (staging)
 				},
 				{
 					binding: 5,
@@ -163,6 +372,10 @@ export class Mesh {
 				{
 					binding: 6,
 					resource: {buffer: chunk.density}, // Output
+				},
+				{
+					binding: 7,
+					resource: {buffer: this.vertexCounter}, // Atomic counter
 				},
 			],
 		});

@@ -48,28 +48,31 @@ export class Chunk {
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
 		});
 
+		// Start with small initial buffers - they will grow as needed
+		const initialVertexCount = 1024;
+
 		this.vertices = device.createBuffer({
 			label: `${chunkLabel} Vertices`,
-			size: 8 * maxVertices, // vec4<f16> = 8 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+			size: 8 * initialVertexCount, // vec4<f16> = 8 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.normals = device.createBuffer({
 			label: `${chunkLabel} Normals`,
-			size: 8 * maxVertices, // vec3<f16> = 8 bytes each (with padding)
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+			size: 8 * initialVertexCount, // vec3<f16> = 8 bytes each (with padding)
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.materialColors = device.createBuffer({
 			label: `${chunkLabel} Material Colors`,
-			size: 4 * maxVertices, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+			size: 4 * initialVertexCount, // u32 = 4 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.colors = device.createBuffer({
 			label: `${chunkLabel} Lit Colors`,
-			size: 4 * maxVertices, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+			size: 4 * initialVertexCount, // u32 = 4 bytes each
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
 		});
 
 		this.commands = device.createBuffer({

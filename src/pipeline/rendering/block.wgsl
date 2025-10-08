@@ -32,22 +32,19 @@ fn vs_main(
 ) -> VertexOutput {
 	var out: VertexOutput;
 
-	// Calculate global vertex index
-	let globalVertexIndex = instanceIndex * 1536u + vertexIndex;
-
-	// Use per-vertex color from mesh data
-	let packedColor = colors[globalVertexIndex];
+	// Use vertexIndex directly - firstVertex in command handles offset
+	let packedColor = colors[vertexIndex];
 	let vertexColor = unpackColor(packedColor);
 	out.color = vertexColor;
 
 	// Get world position (convert from f16 to f32)
-	let world_pos = vec3<f32>(vertices[globalVertexIndex].xyz);
+	let world_pos = vec3<f32>(vertices[vertexIndex].xyz);
 	out.world_pos = world_pos;
 
 	// Use stored normal (convert from f16 to f32)
-	out.normal = vec3<f32>(normals[globalVertexIndex]);
+	out.normal = vec3<f32>(normals[vertexIndex]);
 
-	out.position = context.perspective * context.view * vec4<f32>(vertices[globalVertexIndex]);
+	out.position = context.perspective * context.view * vec4<f32>(vertices[vertexIndex]);
 	return out;
 }
 

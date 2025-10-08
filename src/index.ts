@@ -49,7 +49,7 @@ document
 
 let lastFrame = performance.now();
 
-function loop() {
+async function loop() {
 	let now = performance.now();
 	const time = now - lastFrame;
 	lastFrame = now;
@@ -67,7 +67,7 @@ function loop() {
 	}
 
 	const updateEncoder = device.createCommandEncoder();
-	streaming.update(updateEncoder);
+	await streaming.update(updateEncoder);
 	device.queue.submit([updateEncoder.finish()]);
 	streaming.afterUpdate().then(() => {
 		// Update the frame graph with GPU render time from the active renderer

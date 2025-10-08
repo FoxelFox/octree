@@ -161,14 +161,14 @@ export class Streaming {
 		}
 	}
 
-	processGenerationQueue(): boolean {
+	async processGenerationQueue(): Promise<boolean> {
 		this.fillGenerationTasks();
 		if (this.pendingGenerations.length === 0) {
 			return false;
 		}
 
 		const currentTask = this.pendingGenerations[0];
-		const completed = this.advanceGeneration(currentTask);
+		const completed = await this.advanceGeneration(currentTask);
 		const task = this.pendingGenerations.shift()!;
 		if (!completed) {
 			this.pendingGenerations.push(task);
@@ -176,12 +176,12 @@ export class Streaming {
 		return completed;
 	}
 
-	update(updateEncoder: GPUCommandEncoder) {
+	async update(updateEncoder: GPUCommandEncoder) {
 		const center = this.cameraPositionInGridSpace;
 		const octant = this.cameraOctantInChunk;
 
 		// Process one chunk from generation queue per frame
-		const chunkWasGenerated = this.processGenerationQueue();
+		const chunkWasGenerated = await this.processGenerationQueue();
 
 		// Update active chunks if a new chunk was generated
 		if (chunkWasGenerated) {
@@ -356,7 +356,7 @@ export class Streaming {
 		}
 	}
 
-	private advanceGeneration(task: GenerationTask): boolean {
+	private async advanceGeneration(task: GenerationTask): Promise<boolean> {
 		switch (task.stage) {
 			case 'create': {
 				const chunk = this.initializeChunk(task.position);
@@ -407,13 +407,24 @@ export class Streaming {
 				const minZ = processed * compression;
 				const maxZ = Math.min(gridSize, (processed + sliceCount) * compression);
 				const encoder = device.createCommandEncoder();
+				// Only reset counter on first slice
+				const isFirstSlice = processed === 0;
 				this.mesh.update(encoder, chunk, {
 					min: [0, 0, minZ],
 					max: [gridSize, gridSize, maxZ],
-				});
+				}, isFirstSlice);
 				device.queue.submit([encoder.finish()]);
 				task.progress = processed + sliceCount;
 				if (task.progress >= totalSlices) {
+					// Finalize mesh generation after all slices are processed
+					const result = await this.mesh.finalizeMeshGeneration();
+					if (result && result.buffersResized) {
+						// Buffers were resized, need to recreate bind groups
+						this.block.unregisterChunk(chunk);
+						this.light.unregisterChunk(chunk);
+						this.block.registerChunk(chunk);
+						this.light.registerChunk(chunk);
+					}
 					task.stage = 'light';
 					task.progress = 0;
 				}

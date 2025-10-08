@@ -461,7 +461,7 @@ export class VoxelEditor {
 	/**
 	 * Regenerate meshes asynchronously
 	 */
-	private regenerateMeshesAsync(chunk: Chunk) {
+	private async regenerateMeshesAsync(chunk: Chunk) {
 		// Generate new meshes from modified voxel data
 		const encoder = device.createCommandEncoder({
 			label: "Async Mesh Regeneration",
@@ -507,6 +507,16 @@ export class VoxelEditor {
 		this.mesh.update(encoder, chunk, localBounds);
 
 		device.queue.submit([encoder.finish()]);
+
+		// Finalize mesh generation and copy packed data
+		const result = await this.mesh.finalizeMeshGeneration();
+		if (result && result.buffersResized) {
+			// Buffers were resized, need to recreate bind groups
+			this.block.unregisterChunk(chunk);
+			this.light.unregisterChunk(chunk);
+			this.block.registerChunk(chunk);
+			this.light.registerChunk(chunk);
+		}
 
 		// Invalidate lighting after voxel changes
 		this.light.invalidate(chunk);

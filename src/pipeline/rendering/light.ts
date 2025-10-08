@@ -458,6 +458,10 @@ export class Light {
 					binding: 4,
 					resource: {buffer: chunk.vertexCounts},  // Vertex counts per meshlet
 				},
+				{
+					binding: 5,
+					resource: {buffer: chunk.commands},  // Indirect draw commands (firstVertex offsets)
+				},
 			],
 		});
 	}
