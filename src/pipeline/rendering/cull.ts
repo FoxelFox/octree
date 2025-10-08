@@ -112,15 +112,9 @@ export class Cull {
 		pass.end();
 		this.timer.resolveTimestamps(encoder);
 
-		// Start async readback if not already in progress
+		// Track that this chunk needs readback after submission
 		const frames = (this.framesSinceUpdate.get(chunk) ?? 0) + 1;
 		this.framesSinceUpdate.set(chunk, frames);
-		const inProgress = this.readbackInProgress.get(chunk) ?? false;
-		if (!inProgress && frames >= 2) {
-			// Update every 2 frames
-			this.startAsyncReadback(chunk);
-			this.framesSinceUpdate.set(chunk, 0);
-		}
 	}
 
 
@@ -129,6 +123,16 @@ export class Cull {
 		if (this.copyPerformedThisFrame) {
 			this.copyPerformedThisFrame = false;
 			this.needsRefresh = false;
+		}
+
+		// Start readbacks after GPU work has been submitted
+		for (const [chunk, frames] of this.framesSinceUpdate.entries()) {
+			const inProgress = this.readbackInProgress.get(chunk) ?? false;
+			if (!inProgress && frames >= 2) {
+				// Update every 2 frames
+				this.startAsyncReadback(chunk);
+				this.framesSinceUpdate.set(chunk, 0);
+			}
 		}
 	}
 
@@ -431,8 +435,8 @@ export class Cull {
 			return;
 		}
 
-		// Wait a frame to ensure GPU work is submitted
-		await new Promise((resolve) => requestAnimationFrame(resolve));
+		// Use onSubmittedWorkDone to ensure previous GPU work completes before copying
+		await device.queue.onSubmittedWorkDone();
 
 		// Check if chunk was cleaned up while we were waiting
 		if (!this.chunkCounters.has(chunk)) {
