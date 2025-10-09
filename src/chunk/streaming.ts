@@ -16,6 +16,7 @@ interface GenerationTask {
 	stage: GenerationStage;
 	chunk?: Chunk;
 	progress: number;
+	threadAccumulator?: number; // Accumulated threads for noise generation
 }
 
 export class Streaming {
@@ -25,8 +26,8 @@ export class Streaming {
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	maxConcurrentGenerations = 1;
-	noiseSlicesPerFrame = 1;
-	meshSlicesPerFrame = 1;
+	noiseThreadsPerFrame = 1024 * 16;
+	meshSlicesPerFrame = 256;
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
@@ -352,6 +353,7 @@ export class Streaming {
 				position: [...position],
 				stage: 'create',
 				progress: 0,
+				threadAccumulator: 0,
 			});
 		}
 	}
@@ -371,22 +373,48 @@ export class Streaming {
 				if (!chunk) {
 					throw new Error('Chunk missing for noise stage');
 				}
-				const totalSlices = gridSize + 1;
-				const processed = task.progress ?? 0;
-				const remaining = Math.max(0, totalSlices - processed);
-				const sliceCount = Math.min(this.noiseSlicesPerFrame, remaining);
-				if (sliceCount <= 0) {
+				const voxelGridSize = gridSize + 1;
+				const totalThreads = voxelGridSize * voxelGridSize * voxelGridSize;
+				const processedThreads = task.progress ?? 0;
+
+				if (processedThreads >= totalThreads) {
 					task.stage = 'mesh';
 					task.progress = 0;
 					return false;
 				}
-				const encoder = device.createCommandEncoder();
-				this.noise.update(encoder, chunk, processed, sliceCount);
-				device.queue.submit([encoder.finish()]);
-				task.progress = processed + sliceCount;
-				if (task.progress >= totalSlices) {
+
+				// Calculate how many threads we can process this frame
+				const remainingThreads = totalThreads - processedThreads;
+				const threadsThisFrame = Math.min(this.noiseThreadsPerFrame, remainingThreads);
+
+				// Convert thread count to slices (each slice is voxelGridSize² threads)
+				const threadsPerSlice = voxelGridSize * voxelGridSize;
+				const currentSlice = Math.floor(processedThreads / threadsPerSlice);
+				const threadAccumulated = (task.threadAccumulator ?? 0) + threadsThisFrame;
+				const slicesToProcess = Math.floor(threadAccumulated / threadsPerSlice);
+
+				if (slicesToProcess > 0) {
+					// Process complete slices
+					const maxSlice = Math.floor(totalThreads / threadsPerSlice);
+					const actualSlices = Math.min(slicesToProcess, maxSlice - currentSlice);
+
+					if (actualSlices > 0) {
+						const encoder = device.createCommandEncoder();
+						this.noise.update(encoder, chunk, currentSlice, actualSlices);
+						device.queue.submit([encoder.finish()]);
+						task.progress = processedThreads + (actualSlices * threadsPerSlice);
+						task.threadAccumulator = threadAccumulated - (actualSlices * threadsPerSlice);
+					}
+				} else {
+					// Accumulate threads for next frame
+					task.threadAccumulator = threadAccumulated;
+					task.progress = processedThreads;
+				}
+
+				if (task.progress >= totalThreads) {
 					task.stage = 'mesh';
 					task.progress = 0;
+					task.threadAccumulator = 0;
 				}
 				return false;
 			}
