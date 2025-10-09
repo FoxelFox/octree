@@ -444,15 +444,8 @@ export class Streaming {
 				device.queue.submit([encoder.finish()]);
 				task.progress = processed + sliceCount;
 				if (task.progress >= totalSlices) {
-					// Finalize mesh generation after all slices are processed
-					const result = await this.mesh.finalizeMeshGeneration();
-					if (result && result.buffersResized) {
-						// Buffers were resized, need to recreate bind groups
-						this.block.unregisterChunk(chunk);
-						this.light.unregisterChunk(chunk);
-						this.block.registerChunk(chunk);
-						this.light.registerChunk(chunk);
-					}
+					// Start mesh finalization (non-blocking) - readback happens in parallel with lighting
+					this.mesh.startMeshFinalization();
 					task.stage = 'light';
 					task.progress = 0;
 				}
@@ -477,6 +470,15 @@ export class Streaming {
 				const chunk = task.chunk;
 				if (!chunk) {
 					throw new Error('Chunk missing for finalize stage');
+				}
+				// Complete the mesh finalization that was started after mesh stage
+				const result = await this.mesh.completeMeshFinalization();
+				if (result && result.buffersResized) {
+					// Buffers were resized, need to recreate bind groups
+					this.block.unregisterChunk(chunk);
+					this.light.unregisterChunk(chunk);
+					this.block.registerChunk(chunk);
+					this.light.registerChunk(chunk);
 				}
 				this.grid.set(task.index, chunk);
 				const neighbors = this.getNeighborChunks(chunk);

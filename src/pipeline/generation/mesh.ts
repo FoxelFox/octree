@@ -191,14 +191,23 @@ export class Mesh {
 		this.pendingChunkCopy = { chunk, encoder };
 	}
 
-	async finalizeMeshGeneration(): Promise<{ chunk: Chunk; buffersResized: boolean } | null> {
-		if (!this.pendingChunkCopy) return null;
+	startMeshFinalization(): void {
+		if (!this.pendingChunkCopy) return;
+
+		// Start the async readback without awaiting
+		this.pendingReadback = this.vertexCounterReadback.mapAsync(GPUMapMode.READ);
+	}
+
+	async completeMeshFinalization(): Promise<{ chunk: Chunk; buffersResized: boolean } | null> {
+		if (!this.pendingChunkCopy || !this.pendingReadback) return null;
 
 		const { chunk } = this.pendingChunkCopy;
 		this.pendingChunkCopy = null;
 
-		// Read back the actual vertex count
-		await this.vertexCounterReadback.mapAsync(GPUMapMode.READ);
+		// Wait for the readback that was started earlier
+		await this.pendingReadback;
+		this.pendingReadback = null;
+
 		const counterData = new Uint32Array(this.vertexCounterReadback.getMappedRange());
 		const actualVertexCount = counterData[0];
 		this.vertexCounterReadback.unmap();
@@ -282,6 +291,7 @@ export class Mesh {
 	}
 
 	private pendingChunkCopy: { chunk: Chunk; encoder: GPUCommandEncoder } | null = null;
+	private pendingReadback: Promise<void> | null = null;
 
 	afterUpdate() {
 		this.timer.readTimestamps();

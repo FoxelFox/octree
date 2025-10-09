@@ -435,15 +435,8 @@ export class Cull {
 			return;
 		}
 
-		// Use onSubmittedWorkDone to ensure previous GPU work completes before copying
-		await device.queue.onSubmittedWorkDone();
-
-		// Check if chunk was cleaned up while we were waiting
-		if (!this.chunkCounters.has(chunk)) {
-			return; // Chunk was unregistered, abort readback
-		}
-
 		// Atomically copy both counter and indices in the same submission
+		// GPU automatically handles synchronization - no need for onSubmittedWorkDone
 		const encoder = device.createCommandEncoder();
 		encoder.copyBufferToBuffer(
 			counter,
@@ -461,14 +454,28 @@ export class Cull {
 		);
 		device.queue.submit([encoder.finish()]);
 
-		// Read counter first
+		// Read counter first - mapAsync will wait for GPU copy to complete
 		await counterReadback.mapAsync(GPUMapMode.READ);
+
+		// Check if chunk was cleaned up while we were waiting
+		if (!this.chunkCounters.has(chunk)) {
+			counterReadback.unmap();
+			return; // Chunk was unregistered, abort readback
+		}
+
 		const counterData = counterReadback.getMappedRange();
 		const newCount = new Uint32Array(counterData)[0];
 		counterReadback.unmap();
 
 		// Read indices using the count that was valid when buffers were copied
 		await indicesReadback.mapAsync(GPUMapMode.READ);
+
+		// Check again if chunk was cleaned up
+		if (!this.chunkCounters.has(chunk)) {
+			indicesReadback.unmap();
+			return;
+		}
+
 		const indicesData = indicesReadback.getMappedRange();
 		const readSize = Math.min(newCount * 4, indicesBuffer.size);
 		chunk.indices = new Uint32Array(indicesData.slice(0, readSize));
