@@ -196,6 +196,16 @@ export class Mesh {
 
 		// Start the async readback without awaiting
 		this.pendingReadback = this.vertexCounterReadback.mapAsync(GPUMapMode.READ);
+		this.readbackComplete = false;
+
+		// Track completion without blocking
+		this.pendingReadback.then(() => {
+			this.readbackComplete = true;
+		});
+	}
+
+	isMeshFinalizationReady(): boolean {
+		return this.readbackComplete;
 	}
 
 	async completeMeshFinalization(): Promise<{ chunk: Chunk; buffersResized: boolean } | null> {
@@ -207,12 +217,10 @@ export class Mesh {
 		// Wait for the readback that was started earlier
 		await this.pendingReadback;
 		this.pendingReadback = null;
-
+		this.readbackComplete = false;
 		const counterData = new Uint32Array(this.vertexCounterReadback.getMappedRange());
 		const actualVertexCount = counterData[0];
 		this.vertexCounterReadback.unmap();
-
-		console.log(`Chunk ${chunk.id}: actualVertexCount = ${actualVertexCount} (staging max: ${this.maxVertices})`);
 
 		if (actualVertexCount === 0) {
 			console.warn(`Chunk ${chunk.id}: No vertices generated!`);
@@ -226,9 +234,7 @@ export class Mesh {
 
 		// Ensure chunk buffers are sized appropriately (with some headroom)
 		const targetSize = Math.ceil(actualVertexCount * 1.2);
-		console.log(`Target buffer size: ${targetSize} vertices (${targetSize * 8} bytes for vertices)`);
 		const buffersResized = this.ensureChunkBufferSize(chunk, targetSize);
-		console.log(`Buffers resized: ${buffersResized}, new size: ${chunk.vertices.size} bytes`);
 
 		// Create new encoder for the copy operation
 		const copyEncoder = device.createCommandEncoder({
@@ -239,8 +245,6 @@ export class Mesh {
 		const verticesBytes = actualVertexCount * 8;
 		const normalsBytes = actualVertexCount * 8;
 		const colorsBytes = actualVertexCount * 4;
-
-		console.log(`Copying ${verticesBytes} bytes of vertices (chunk buffer size: ${chunk.vertices.size})`);
 
 		// Ensure we don't exceed buffer sizes
 		if (verticesBytes > chunk.vertices.size) {
@@ -292,6 +296,7 @@ export class Mesh {
 
 	private pendingChunkCopy: { chunk: Chunk; encoder: GPUCommandEncoder } | null = null;
 	private pendingReadback: Promise<void> | null = null;
+	private readbackComplete: boolean = false;
 
 	afterUpdate() {
 		this.timer.readTimestamps();

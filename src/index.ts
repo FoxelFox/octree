@@ -67,7 +67,7 @@ async function loop() {
 	}
 
 	const updateEncoder = device.createCommandEncoder();
-	await streaming.update(updateEncoder);
+	streaming.update(updateEncoder);
 	device.queue.submit([updateEncoder.finish()]);
 	streaming.afterUpdate().then(() => {
 		// Update the frame graph with GPU render time from the active renderer

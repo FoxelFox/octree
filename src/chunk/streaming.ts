@@ -162,32 +162,48 @@ export class Streaming {
 		}
 	}
 
-	async processGenerationQueue(): Promise<boolean> {
+	processGenerationQueue(): void {
 		this.fillGenerationTasks();
 		if (this.pendingGenerations.length === 0) {
-			return false;
+			return;
 		}
 
 		const currentTask = this.pendingGenerations[0];
-		const completed = await this.advanceGeneration(currentTask);
-		const task = this.pendingGenerations.shift()!;
-		if (!completed) {
-			this.pendingGenerations.push(task);
-		}
-		return completed;
+
+		// Process generation task without awaiting (non-blocking)
+		this.advanceGeneration(currentTask).then((completed) => {
+			if (completed) {
+				// Remove the completed task
+				const index = this.pendingGenerations.indexOf(currentTask);
+				if (index !== -1) {
+					this.pendingGenerations.splice(index, 1);
+				}
+			} else {
+				// Move task to end of queue if not completed
+				const index = this.pendingGenerations.indexOf(currentTask);
+				if (index === 0) {
+					this.pendingGenerations.shift();
+					this.pendingGenerations.push(currentTask);
+				}
+			}
+		}).catch((error) => {
+			console.error('Error in chunk generation:', error);
+			const index = this.pendingGenerations.indexOf(currentTask);
+			if (index !== -1) {
+				this.pendingGenerations.splice(index, 1);
+			}
+			if (currentTask.chunk) {
+				this.inProgressGenerations.delete(currentTask.index);
+			}
+		});
 	}
 
-	async update(updateEncoder: GPUCommandEncoder) {
+	update(updateEncoder: GPUCommandEncoder) {
 		const center = this.cameraPositionInGridSpace;
 		const octant = this.cameraOctantInChunk;
 
-		// Process one chunk from generation queue per frame
-		const chunkWasGenerated = await this.processGenerationQueue();
-
-		// Update active chunks if a new chunk was generated
-		if (chunkWasGenerated) {
-			this.updateActiveChunks(center);
-		}
+		// Process one chunk from generation queue per frame (non-blocking)
+		this.processGenerationQueue();
 
 		// Update active chunks based on new position
 		this.updateActiveChunks(center);
@@ -471,7 +487,12 @@ export class Streaming {
 				if (!chunk) {
 					throw new Error('Chunk missing for finalize stage');
 				}
-				// Complete the mesh finalization that was started after mesh stage
+				// Check if mesh finalization is ready (non-blocking)
+				if (!this.mesh.isMeshFinalizationReady()) {
+					// Not ready yet, keep task pending
+					return false;
+				}
+				// Complete the mesh finalization (now won't block since readback is ready)
 				const result = await this.mesh.completeMeshFinalization();
 				if (result && result.buffersResized) {
 					// Buffers were resized, need to recreate bind groups
