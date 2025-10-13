@@ -26,8 +26,8 @@ export class Streaming {
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	maxConcurrentGenerations = 1;
-	noiseThreadsPerFrame = 1024 * 16;
-	meshSlicesPerFrame = 256;
+	noiseThreadsPerFrame = 1024 * 32;
+	meshThreadsPerFrame = 1024 * 16;
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
@@ -439,31 +439,58 @@ export class Streaming {
 				if (!chunk) {
 					throw new Error('Chunk missing for mesh stage');
 				}
-				const totalSlices = gridSize / compression;
-				const processed = task.progress ?? 0;
-				const remaining = Math.max(0, totalSlices - processed);
-				const sliceCount = Math.min(this.meshSlicesPerFrame, remaining);
-				if (sliceCount <= 0) {
-					task.stage = 'light';
-					task.progress = 0;
-					return false;
-				}
-				const minZ = processed * compression;
-				const maxZ = Math.min(gridSize, (processed + sliceCount) * compression);
-				const encoder = device.createCommandEncoder();
-				// Only reset counter on first slice
-				const isFirstSlice = processed === 0;
-				this.mesh.update(encoder, chunk, {
-					min: [0, 0, minZ],
-					max: [gridSize, gridSize, maxZ],
-				}, isFirstSlice);
-				device.queue.submit([encoder.finish()]);
-				task.progress = processed + sliceCount;
-				if (task.progress >= totalSlices) {
+				const totalThreads = gridSize * gridSize * gridSize;
+				const processedThreads = task.progress ?? 0;
+
+				if (processedThreads >= totalThreads) {
 					// Start mesh finalization (non-blocking) - readback happens in parallel with lighting
 					this.mesh.startMeshFinalization();
 					task.stage = 'light';
 					task.progress = 0;
+					return false;
+				}
+
+				// Calculate how many threads we can process this frame
+				const remainingThreads = totalThreads - processedThreads;
+				const threadsThisFrame = Math.min(this.meshThreadsPerFrame, remainingThreads);
+
+				// Convert thread count to slices (each slice is compression voxels thick)
+				const threadsPerSlice = gridSize * gridSize * compression;
+				const currentSlice = Math.floor(processedThreads / threadsPerSlice);
+				const threadAccumulated = (task.threadAccumulator ?? 0) + threadsThisFrame;
+				const slicesToProcess = Math.floor(threadAccumulated / threadsPerSlice);
+
+				if (slicesToProcess > 0) {
+					// Process complete slices
+					const totalSlices = gridSize / compression;
+					const actualSlices = Math.min(slicesToProcess, totalSlices - currentSlice);
+
+					if (actualSlices > 0) {
+						const minZ = currentSlice * compression;
+						const maxZ = Math.min(gridSize, (currentSlice + actualSlices) * compression);
+						const encoder = device.createCommandEncoder();
+						// Only reset counter on first slice
+						const isFirstSlice = currentSlice === 0;
+						this.mesh.update(encoder, chunk, {
+							min: [0, 0, minZ],
+							max: [gridSize, gridSize, maxZ],
+						}, isFirstSlice);
+						device.queue.submit([encoder.finish()]);
+						task.progress = processedThreads + (actualSlices * threadsPerSlice);
+						task.threadAccumulator = threadAccumulated - (actualSlices * threadsPerSlice);
+					}
+				} else {
+					// Accumulate threads for next frame
+					task.threadAccumulator = threadAccumulated;
+					task.progress = processedThreads;
+				}
+
+				if (task.progress >= totalThreads) {
+					// Start mesh finalization (non-blocking) - readback happens in parallel with lighting
+					this.mesh.startMeshFinalization();
+					task.stage = 'light';
+					task.progress = 0;
+					task.threadAccumulator = 0;
 				}
 				return false;
 			}
