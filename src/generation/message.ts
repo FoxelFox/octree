@@ -6,5 +6,5 @@ export interface Request {
 
 export interface Result {
     id: number
-    result: any
+    data?: any
 }

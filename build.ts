@@ -4,7 +4,7 @@ import {copyFileSync} from 'fs';
 const isDev = process.argv.includes('--dev');
 
 const result = await Bun.build({
-    entrypoints: ['./src/index.html', './src/generation/worker.ts'],
+    entrypoints: ['./src/index.html', './src/worker.ts'],
     outdir: './dist',
     plugins: [
         wgsl({minify: !isDev})

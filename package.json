@@ -4,8 +4,8 @@
     "src/my-lib/pkg"
   ],
   "scripts": {
-    "build": "bun run build.ts",
-    "dev": "bun run build.ts --dev",
+    "build": "wasm-pack --quiet build src/my-lib --target web && bun run build.ts",
+    "dev": "wasm-pack --quiet build src/my-lib --target web && bun run build.ts --dev",
     "start": "http-server dist -c-1",
     "format": "prettier --write ."
   },

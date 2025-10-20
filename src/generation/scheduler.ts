@@ -19,14 +19,14 @@ export class Scheduler {
     constructor() {
         for (let i = 0; i < navigator.hardwareConcurrency; i++) {
 
-            const worker = new Worker("./generation/worker.js");
+            const worker = new Worker("./worker.js", {type: 'module'});
 
             worker.onmessage = (res) => {
                 const r = res.data as Result;
                 const task = this.activeTasks.get(r.id);
 
                 this.activeTasks.delete(r.id);
-                task.resolve(r.result);
+                task.resolve(r.data);
                 this.idle.push(worker);
                 this.update();
             }
