@@ -115,7 +115,7 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 	);
 
 	let step_size = f32(COMPRESSION);
-	let density_threshold = 512u;
+	let density_threshold = 1024u;
 	let max_steps = chunk_block_count();
 
 	for (var corner_idx = 0u; corner_idx < 8u; corner_idx++) {

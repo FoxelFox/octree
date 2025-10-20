@@ -1,17 +1,20 @@
 {
-	"type": "module",
-	"scripts": {
-		"build": "bun run build.ts",
-		"dev": "bun run build.ts --dev",
-		"start": "http-server dist -c-1",
-		"format": "prettier --write ."
-	},
-	"devDependencies": {
-		"@types/bun": "latest",
-		"@webgpu/types": "^0.1.64",
-		"http-server": "^14.0.0"
-	},
-	"dependencies": {
-		"wgpu-matrix": "^3.4.0"
-	}
+  "type": "module",
+  "workspaces": [
+    "src/my-lib/pkg"
+  ],
+  "scripts": {
+    "build": "bun run build.ts",
+    "dev": "bun run build.ts --dev",
+    "start": "http-server dist -c-1",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@webgpu/types": "^0.1.64",
+    "http-server": "^14.0.0"
+  },
+  "dependencies": {
+    "wgpu-matrix": "^3.4.0"
+  }
 }

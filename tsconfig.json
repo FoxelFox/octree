@@ -1,8 +1,17 @@
 {
   "compilerOptions": {
-		"target": "ESNext",
-		"module": "ESNext",
-		"moduleResolution": "node",
-    "types": ["@webgpu/types", "@types/bun"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [
+      "@webgpu/types",
+      "@types/bun"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "my-lib/*": [
+        "./src/my-lib/pkg/*"
+      ]
+    }
   }
 }
