@@ -34,8 +34,6 @@ export class Scheduler {
             this.idle.push(worker);
 
         }
-
-        console.log(`Using ${this.idle.length} Worker Threads.`);
     }
 
 
@@ -61,8 +59,6 @@ export class Scheduler {
             this.activeTasks.set(task.id, task);
             worker.postMessage({id: task.id, operation: task.operation, args: task.args});
         }
-
-        console.log(`queue ${this.queue.length}, idle ${this.idle.length}`)
     }
 
 

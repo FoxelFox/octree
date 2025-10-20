@@ -6,14 +6,6 @@ import {Streaming} from "./chunk/streaming";
 import {Scheduler} from "./generation/scheduler";
 
 export const scheduler = new Scheduler();
-
-for (let i = 0; i < 100; i++) {
-    scheduler.work("add", [5, 5]).then(res => {
-        console.log(res)
-    });
-}
-
-
 export const gpu = new GPUContext();
 await gpu.init();
 

@@ -100,6 +100,10 @@ export class Chunk {
 		});
 	}
 
+	setVoxelData(data: Float32Array) {
+		device.queue.writeBuffer(this.voxelData, 0, data);
+	}
+
 	destroy() {
 		// Destroy all GPU buffers to free memory
 		this.voxelData.destroy();
