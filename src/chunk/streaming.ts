@@ -26,8 +26,7 @@ export class Streaming {
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	maxConcurrentGenerations = 1;
-	noiseThreadsPerFrame = 256 * 256;
-	meshThreadsPerFrame = 256 * 256 * 8;
+	meshThreadsPerFrame = 256 * 256 * 256 * 256;
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
