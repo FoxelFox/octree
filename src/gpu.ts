@@ -16,9 +16,12 @@ export class GPUContext {
 	keys: Set<string>;
 	camera: {
 		position: [number, number, number];
+		velocity: [number, number, number];
 		yaw: number;
 		pitch: number;
 		speed: number;
+		acceleration: number;
+		friction: number;
 	};
 	time: {
 		now: number;
@@ -46,9 +49,12 @@ export class GPUContext {
 		this.keys = new Set();
 		this.camera = {
 			position: [128, 128, 128],
+			velocity: [0, 0, 0],
 			yaw: 0.7,
 			pitch: -0.2,
 			speed: 16,
+			acceleration: 80,
+			friction: 0.99,
 		};
 		this.time = {now: 0, delta: 0};
 		this.taaToggle = {
@@ -193,8 +199,8 @@ export class GPUContext {
 		if (!this.mouse.locked) return;
 
 		const speedMultiplier =
-			this.keys.has("shiftleft") || this.keys.has("shiftright") ? 3 : 1;
-		const moveSpeed = this.camera.speed * this.time.delta * speedMultiplier;
+			this.keys.has("shiftleft") || this.keys.has("shiftright") ? 5 : 1;
+		const accel = this.camera.acceleration * this.time.delta * speedMultiplier;
 
 		const forward = [
 			Math.sin(this.camera.yaw) * Math.cos(this.camera.pitch),
@@ -204,24 +210,36 @@ export class GPUContext {
 
 		const right = [Math.cos(this.camera.yaw), 0, -Math.sin(this.camera.yaw)];
 
+		// Apply input acceleration
 		if (this.keys.has("keyw")) {
-			this.camera.position[0] += forward[0] * moveSpeed;
-			this.camera.position[1] += forward[1] * moveSpeed;
-			this.camera.position[2] += forward[2] * moveSpeed;
+			this.camera.velocity[0] += forward[0] * accel;
+			this.camera.velocity[1] += forward[1] * accel;
+			this.camera.velocity[2] += forward[2] * accel;
 		}
 		if (this.keys.has("keys")) {
-			this.camera.position[0] -= forward[0] * moveSpeed;
-			this.camera.position[1] -= forward[1] * moveSpeed;
-			this.camera.position[2] -= forward[2] * moveSpeed;
+			this.camera.velocity[0] -= forward[0] * accel;
+			this.camera.velocity[1] -= forward[1] * accel;
+			this.camera.velocity[2] -= forward[2] * accel;
 		}
 		if (this.keys.has("keya")) {
-			this.camera.position[0] += right[0] * moveSpeed;
-			this.camera.position[2] += right[2] * moveSpeed;
+			this.camera.velocity[0] += right[0] * accel;
+			this.camera.velocity[2] += right[2] * accel;
 		}
 		if (this.keys.has("keyd")) {
-			this.camera.position[0] -= right[0] * moveSpeed;
-			this.camera.position[2] -= right[2] * moveSpeed;
+			this.camera.velocity[0] -= right[0] * accel;
+			this.camera.velocity[2] -= right[2] * accel;
 		}
+
+		// Apply friction
+		this.camera.velocity[0] *= this.camera.friction;
+		this.camera.velocity[1] *= this.camera.friction;
+		this.camera.velocity[2] *= this.camera.friction;
+
+
+		// Update position
+		this.camera.position[0] += this.camera.velocity[0] * this.time.delta;
+		this.camera.position[1] += this.camera.velocity[1] * this.time.delta;
+		this.camera.position[2] += this.camera.velocity[2] * this.time.delta;
 	}
 
 }
