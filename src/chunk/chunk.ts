@@ -16,6 +16,7 @@ export class Chunk {
 
 
 	light: GPUBuffer;		// light data
+	chunkLabel: string;
 
 
 	constructor(id: number, position: number[]) {
@@ -28,12 +29,11 @@ export class Chunk {
 		const size = Math.pow(voxelGridSize, 3) * 8;
 		const sSize = gridSize / compression;
 		const sSize3 = sSize * sSize * sSize;
-		const maxVertices = sSize3 * 1536;
 
-		const chunkLabel = `Chunk[${id}](${position[0]},${position[1]},${position[2]})`;
+		this.chunkLabel = `Chunk[${id}](${position[0]},${position[1]},${position[2]})`;
 
 		this.voxelData = device.createBuffer({
-			label: `${chunkLabel} Voxel Data`,
+			label: `${this.chunkLabel} Voxel Data`,
 			size,
 			usage:
 				GPUBufferUsage.STORAGE |
@@ -43,58 +43,32 @@ export class Chunk {
 
 		// Separate buffers for mesh data
 		this.vertexCounts = device.createBuffer({
-			label: `${chunkLabel} Vertex Counts`,
+			label: `${this.chunkLabel} Vertex Counts`,
 			size: 4 * sSize3, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-		});
-
-		// Start with small initial buffers - they will grow as needed
-		const initialVertexCount = 1024;
-
-		this.vertices = device.createBuffer({
-			label: `${chunkLabel} Vertices`,
-			size: 8 * initialVertexCount, // vec4<f16> = 8 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.normals = device.createBuffer({
-			label: `${chunkLabel} Normals`,
-			size: 8 * initialVertexCount, // vec3<f16> = 8 bytes each (with padding)
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.materialColors = device.createBuffer({
-			label: `${chunkLabel} Material Colors`,
-			size: 4 * initialVertexCount, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-		});
-
-		this.colors = device.createBuffer({
-			label: `${chunkLabel} Lit Colors`,
-			size: 4 * initialVertexCount, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 		});
 
 		this.commands = device.createBuffer({
-			label: `${chunkLabel} Commands`,
+			label: `${this.chunkLabel} Commands`,
 			size: 16 * sSize3,
 			usage:
 				GPUBufferUsage.STORAGE |
 				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.COPY_DST |
 				GPUBufferUsage.INDIRECT,
 		});
 
 		this.density = device.createBuffer({
-			label: `${chunkLabel} Density`,
+			label: `${this.chunkLabel} Density`,
 			size: 4 * sSize3,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 		});
 
 
 		// Create light buffer: stores light intensity (R) and shadow factor (G) for each compressed cell
 		// Format: RG32Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
 		this.light = device.createBuffer({
-			label: `${chunkLabel} Light`,
+			label: `${this.chunkLabel} Light`,
 			size: sSize3 * 8, // 2 * 4 bytes per cell (RG32Float)
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 		});
@@ -102,6 +76,78 @@ export class Chunk {
 
 	setVoxelData(data: Float32Array) {
 		device.queue.writeBuffer(this.voxelData, 0, data);
+	}
+
+	setColors(data: Uint32Array) {
+
+		if (this.colors) {
+			this.colors.destroy();
+		}
+
+		this.colors = device.createBuffer({
+			label: `${this.chunkLabel} Lit Colors`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+		});
+
+		device.queue.writeBuffer(this.colors, 0, data);
+	}
+
+	setNormals(data: Float32Array) {
+
+		if (this.normals) {
+			this.normals.destroy();
+		}
+
+		this.normals = device.createBuffer({
+			label: `${this.chunkLabel} Normals`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+		});
+
+		device.queue.writeBuffer(this.normals, 0, data);
+	}
+
+	setMaterialColors(data: Uint32Array) {
+
+		if (this.materialColors) {
+			this.materialColors.destroy();
+		}
+
+		this.materialColors = device.createBuffer({
+			label: `${this.chunkLabel} Material Colors`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+		});
+
+		device.queue.writeBuffer(this.materialColors, 0, data);
+	}
+
+	setVertices(data: Float32Array) {
+
+		if (this.vertices) {
+			this.vertices.destroy();
+		}
+
+		this.vertices = device.createBuffer({
+			label: `${this.chunkLabel} Vertices`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+		});
+
+		device.queue.writeBuffer(this.vertices, 0, data);
+	}
+
+	setVertexCounts(data: Uint32Array) {
+		device.queue.writeBuffer(this.vertexCounts, 0, data);
+	}
+
+	setDensities(data: Uint32Array) {
+		device.queue.writeBuffer(this.density, 0, data);
+	}
+
+	setCommands(data: Uint32Array) {
+		device.queue.writeBuffer(this.commands, 0, data);
 	}
 
 	destroy() {

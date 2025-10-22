@@ -1,5 +1,3 @@
-enable f16;
-
 #import "../../data/context.wgsl"
 
 struct VertexOutput {
@@ -9,8 +7,8 @@ struct VertexOutput {
   @location(2) normal: vec3<f32>,
 }
 
-@group(0) @binding(1) var<storage, read> vertices: array<vec4<f16>>;
-@group(0) @binding(2) var<storage, read> normals: array<vec3<f16>>;
+@group(0) @binding(1) var<storage, read> vertices: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read> normals: array<vec3<f32>>;
 @group(0) @binding(3) var<storage, read> colors: array<u32>;
 @group(1) @binding(0) var <uniform> context: Context;
 
@@ -37,12 +35,9 @@ fn vs_main(
 	let vertexColor = unpackColor(packedColor);
 	out.color = vertexColor;
 
-	// Get world position (convert from f16 to f32)
-	let world_pos = vec3<f32>(vertices[vertexIndex].xyz);
-	out.world_pos = world_pos;
+	out.world_pos = vertices[vertexIndex].xyz;
 
-	// Use stored normal (convert from f16 to f32)
-	out.normal = vec3<f32>(normals[vertexIndex]);
+	out.normal = normals[vertexIndex];
 
 	out.position = context.perspective * context.view * vec4<f32>(vertices[vertexIndex]);
 	return out;

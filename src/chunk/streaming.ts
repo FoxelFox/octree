@@ -1,5 +1,5 @@
 import {Chunk} from './chunk';
-import {camera, compression, device, gpu, gridSize, scheduler} from '../index';
+import {camera, device, gpu, gridSize, scheduler} from '../index';
 import {Cull} from '../pipeline/rendering/cull';
 import {Mesh} from '../pipeline/generation/mesh';
 import {Block} from '../pipeline/rendering/block';
@@ -305,16 +305,16 @@ export class Streaming {
 
 	private initializeChunk(position: number[]): Chunk {
 		const chunkId = this.nextChunkId++;
-		const chunk = new Chunk(chunkId, position);
+		return new Chunk(chunkId, position);
+	}
 
+	private registerChunk(chunk: Chunk) {
 		this.noise.registerChunk(chunk);
 		this.mesh.registerChunk(chunk);
 		this.cull.registerChunk(chunk);
 		this.light.registerChunk(chunk);
 		this.block.registerChunk(chunk);
 		this.voxelEditor.registerChunk(chunk);
-
-		return chunk;
 	}
 
 	private fillGenerationTasks() {
@@ -394,8 +394,17 @@ export class Streaming {
 					task.progress = 1;
 
 					scheduler.work("noise_for_chunk", [chunk.position[0], chunk.position[1], chunk.position[2], gridSize]).then(res => {
-						chunk.setVoxelData(res as Float32Array);
-						task.stage = 'mesh';
+						chunk.setColors(res.colors as Uint32Array);
+						chunk.setNormals(res.normals as Float32Array);
+						chunk.setVertices(res.vertices as Float32Array);
+						chunk.setMaterialColors(res.material_colors as Uint32Array);
+						chunk.setCommands(res.commands as Uint32Array);
+						chunk.setDensities(res.densities as Uint32Array);
+						chunk.setVertexCounts(res.vertex_counts as Uint32Array);
+
+						this.registerChunk(chunk);
+
+						task.stage = 'light';
 						task.progress = 0;
 						task.threadAccumulator = 0;
 					});
@@ -403,66 +412,7 @@ export class Streaming {
 
 				return false;
 			}
-			case 'mesh': {
-				const chunk = task.chunk;
-				if (!chunk) {
-					throw new Error('Chunk missing for mesh stage');
-				}
-				const totalThreads = gridSize * gridSize * gridSize;
-				const processedThreads = task.progress ?? 0;
 
-				if (processedThreads >= totalThreads) {
-					// Start mesh finalization (non-blocking) - readback happens in parallel with lighting
-					this.mesh.startMeshFinalization();
-					task.stage = 'light';
-					task.progress = 0;
-					return false;
-				}
-
-				// Calculate how many threads we can process this frame
-				const remainingThreads = totalThreads - processedThreads;
-				const threadsThisFrame = Math.min(this.meshThreadsPerFrame, remainingThreads);
-
-				// Convert thread count to slices (each slice is compression voxels thick)
-				const threadsPerSlice = gridSize * gridSize * compression;
-				const currentSlice = Math.floor(processedThreads / threadsPerSlice);
-				const threadAccumulated = (task.threadAccumulator ?? 0) + threadsThisFrame;
-				const slicesToProcess = Math.floor(threadAccumulated / threadsPerSlice);
-
-				if (slicesToProcess > 0) {
-					// Process complete slices
-					const totalSlices = gridSize / compression;
-					const actualSlices = Math.min(slicesToProcess, totalSlices - currentSlice);
-
-					if (actualSlices > 0) {
-						const minZ = currentSlice * compression;
-						const maxZ = Math.min(gridSize, (currentSlice + actualSlices) * compression);
-						const encoder = device.createCommandEncoder();
-						// Only reset counter on first slice
-						const isFirstSlice = currentSlice === 0;
-						this.mesh.update(encoder, chunk, {
-							min: [0, 0, minZ],
-							max: [gridSize, gridSize, maxZ],
-						}, isFirstSlice);
-						device.queue.submit([encoder.finish()]);
-						task.progress = processedThreads + (actualSlices * threadsPerSlice);
-						task.threadAccumulator = threadAccumulated - (actualSlices * threadsPerSlice);
-					}
-				} else {
-					// Accumulate threads for next frame
-					task.threadAccumulator = threadAccumulated;
-					task.progress = processedThreads;
-				}
-
-				if (task.progress >= totalThreads) {
-					// Start mesh finalization (non-blocking) - readback happens in parallel with lighting
-					this.mesh.startMeshFinalization();
-					task.stage = 'light';
-					task.progress = 0;
-					task.threadAccumulator = 0;
-				}
-				return false;
-			}
 			case 'light': {
 				const chunk = task.chunk;
 				if (!chunk) {
@@ -482,11 +432,6 @@ export class Streaming {
 				const chunk = task.chunk;
 				if (!chunk) {
 					throw new Error('Chunk missing for finalize stage');
-				}
-				// Check if mesh finalization is ready (non-blocking)
-				if (!this.mesh.isMeshFinalizationReady()) {
-					// Not ready yet, keep task pending
-					return false;
 				}
 				// Complete the mesh finalization (now won't block since readback is ready)
 				const result = await this.mesh.completeMeshFinalization();

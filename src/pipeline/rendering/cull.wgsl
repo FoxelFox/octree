@@ -1,5 +1,3 @@
-enable f16;
-
 #import "../../data/context.wgsl"
 
 

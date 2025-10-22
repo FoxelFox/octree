@@ -1,5 +1,3 @@
-enable f16;
-
 #import "../../data/context.wgsl"
 
 struct Command {
@@ -10,13 +8,13 @@ struct Command {
 }
 
 // Input: vertex data
-@group(0) @binding(0) var<storage, read> vertices: array<vec4<f16>>;
+@group(0) @binding(0) var<storage, read> vertices: array<vec4<f32>>;
 
 // Material colors (read-only, original colors from mesh generation)
 @group(0) @binding(1) var<storage, read> materialColors: array<u32>;
 
 // Vertex normals
-@group(0) @binding(2) var<storage, read> normals: array<vec3<f16>>;
+@group(0) @binding(2) var<storage, read> normals: array<vec3<f32>>;
 
 // Lit colors (write-only, output with lighting applied)
 @group(0) @binding(3) var<storage, read_write> colors: array<u32>;
@@ -234,12 +232,7 @@ fn main(
     );
 
     // Get vertex normal
-    let normal_f16 = normals[vertex_index];
-    let world_normal = normalize(vec3<f32>(
-        f32(normal_f16.x),
-        f32(normal_f16.y),
-        f32(normal_f16.z)
-    ));
+    let world_normal = normalize(normals[vertex_index]);
 
     // Sample voxel-based lighting data at vertex position
     let light_info = sampleLightData(world_pos);

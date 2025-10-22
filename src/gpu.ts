@@ -79,22 +79,17 @@ export class GPUContext {
 				if (!adapter) {
 					errorMessage = "No suitable GPU adapter found";
 				} else {
-					// Check for f16 support
-					if (!adapter.features.has("shader-f16")) {
-						errorMessage = "GPU does not support f16 shaders (required for mesh compression)";
-					} else {
-						try {
-							this.device = await adapter.requestDevice({
-								requiredFeatures: ["timestamp-query", "indirect-first-instance", "shader-f16"],
-								requiredLimits: {
-									maxBufferSize: adapter.limits.maxBufferSize,
-									maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
-									maxColorAttachmentBytesPerSample: 32,
-								},
-							});
-						} catch (deviceError) {
-							errorMessage = `Failed to create WebGPU device: ${deviceError.message}`;
-						}
+					try {
+						this.device = await adapter.requestDevice({
+							requiredFeatures: ["timestamp-query", "indirect-first-instance"],
+							requiredLimits: {
+								maxBufferSize: adapter.limits.maxBufferSize,
+								maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+								maxColorAttachmentBytesPerSample: 32,
+							},
+						});
+					} catch (deviceError) {
+						errorMessage = `Failed to create WebGPU device: ${deviceError.message}`;
 					}
 				}
 			}

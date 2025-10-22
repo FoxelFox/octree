@@ -1,5 +1,3 @@
-enable f16;
-
 #import "../../data/context.wgsl"
 
 
@@ -24,8 +22,8 @@ struct VoxelData {
 
 // Output
 @group(0) @binding(1) var<storage, read_write> vertexCounts: array<u32>;
-@group(0) @binding(2) var<storage, read_write> vertices: array<vec4<f16>>;
-@group(0) @binding(3) var<storage, read_write> normals: array<vec3<f16>>;
+@group(0) @binding(2) var<storage, read_write> vertices: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> normals: array<vec3<f32>>;
 @group(0) @binding(4) var<storage, read_write> materialColors: array<u32>;
 @group(0) @binding(5) var<storage, read_write> commands: array<Command>;
 @group(0) @binding(6) var<storage, read_write> density: array<u32>;
@@ -355,8 +353,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 		meshletFirstVertex = baseVertexIndex;
 		for (var i = 0u; i < vertexCount; i++) {
-			vertices[baseVertexIndex + i] = vec4<f16>(vec3<f16>(localPositions[i]), 1.0h);
-			normals[baseVertexIndex + i] = vec3<f16>(localNormals[i]);
+			vertices[baseVertexIndex + i] = vec4<f32>(vec3<f32>(localPositions[i]), 1.0);
+			normals[baseVertexIndex + i] = vec3<f32>(localNormals[i]);
 			materialColors[baseVertexIndex + i] = localColors[i];
 		}
 	}
