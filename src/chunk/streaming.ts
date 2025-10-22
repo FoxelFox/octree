@@ -1,10 +1,8 @@
 import {Chunk} from './chunk';
 import {camera, device, gpu, gridSize, scheduler} from '../index';
 import {Cull} from '../pipeline/rendering/cull';
-import {Mesh} from '../pipeline/generation/mesh';
 import {Block} from '../pipeline/rendering/block';
 import {Light} from '../pipeline/rendering/light';
-import {Noise} from '../pipeline/generation/noise';
 import {VoxelEditorHandler} from '../ui/voxel-editor';
 import {VoxelEditor} from '../pipeline/generation/voxel_editor';
 
@@ -30,13 +28,11 @@ export class Streaming {
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
-	noise = new Noise();
 	cull = new Cull();
 	light = new Light();
 	block = new Block();
-	mesh = new Mesh();
 
-	voxelEditor = new VoxelEditor(this.block, this.mesh, this.light, this.cull);
+	voxelEditor = new VoxelEditor(this.block, this.light, this.cull);
 	voxelEditorHandler = new VoxelEditorHandler(gpu, this.voxelEditor);
 
 	nextChunkId = 1;
@@ -286,7 +282,6 @@ export class Streaming {
 
 	async afterUpdate() {
 		this.block.afterUpdate();
-		this.mesh.afterUpdate();
 		this.cull.afterUpdate();
 		this.light.afterUpdate();
 
@@ -308,8 +303,6 @@ export class Streaming {
 	}
 
 	private registerChunk(chunk: Chunk) {
-		this.noise.registerChunk(chunk);
-		this.mesh.registerChunk(chunk);
 		this.cull.registerChunk(chunk);
 		this.light.registerChunk(chunk);
 		this.block.registerChunk(chunk);
@@ -432,15 +425,6 @@ export class Streaming {
 				if (!chunk) {
 					throw new Error('Chunk missing for finalize stage');
 				}
-				// Complete the mesh finalization (now won't block since readback is ready)
-				const result = await this.mesh.completeMeshFinalization();
-				if (result && result.buffersResized) {
-					// Buffers were resized, need to recreate bind groups
-					this.block.unregisterChunk(chunk);
-					this.light.unregisterChunk(chunk);
-					this.block.registerChunk(chunk);
-					this.light.registerChunk(chunk);
-				}
 				this.grid.set(task.index, chunk);
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
@@ -463,8 +447,6 @@ export class Streaming {
 			this.grid.delete(chunkIndex);
 
 			// Unregister from all pipelines (cull is async)
-			this.noise.unregisterChunk(chunk);
-			this.mesh.unregisterChunk(chunk);
 			await this.cull.unregisterChunk(chunk);
 			this.cull.invalidateChunks(neighbors);
 			this.light.unregisterChunk(chunk);

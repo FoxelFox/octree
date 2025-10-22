@@ -1,9 +1,8 @@
-import { canvas, contextUniform, device, gridSize } from "../../index";
+import { canvas, contextUniform, device, gridSize, scheduler } from "../../index";
 import editShader from "./voxel_edit.wgsl" with { type: "text" };
 import { RenderTimer } from "../timing";
 import { Chunk } from "../../chunk/chunk";
 import { Block } from "../rendering/block";
-import { Mesh } from "./mesh";
 import { Light } from "../rendering/light";
 import { Cull } from "../rendering/cull";
 
@@ -23,7 +22,6 @@ interface ChangeBounds {
 export class VoxelEditor {
 	// Dependencies
 	private block: Block;
-	private mesh: Mesh;
 	private light: Light;
 	private cull: Cull;
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
@@ -51,9 +49,8 @@ export class VoxelEditor {
 	private changeBounds: ChangeBounds | null = null;
 	private timer: RenderTimer;
 
-	constructor(block: Block, mesh: Mesh, light: Light, cull: Cull) {
+	constructor(block: Block, light: Light, cull: Cull) {
 		this.block = block;
-		this.mesh = mesh;
 		this.light = light;
 		this.cull = cull;
 		this.timer = new RenderTimer("voxel_editor");
@@ -462,61 +459,22 @@ export class VoxelEditor {
 	 * Regenerate meshes asynchronously
 	 */
 	private async regenerateMeshesAsync(chunk: Chunk) {
-		// Generate new meshes from modified voxel data
-		const encoder = device.createCommandEncoder({
-			label: "Async Mesh Regeneration",
-		});
+		// Regenerate mesh using Rust worker
+		const result = await scheduler.work("noise_for_chunk", [
+			chunk.position[0],
+			chunk.position[1],
+			chunk.position[2],
+			gridSize
+		]);
 
-		// Convert world-space bounds to chunk-local bounds
-		let localBounds:
-			| { min: [number, number, number]; max: [number, number, number] }
-			| undefined;
-		if (this.changeBounds) {
-			const chunkWorldPos = [
-				chunk.position[0] * gridSize,
-				chunk.position[1] * gridSize,
-				chunk.position[2] * gridSize,
-			];
-
-			// Convert world-space to chunk-local coordinates
-			localBounds = {
-				min: [
-					Math.max(0, this.changeBounds.min[0] - chunkWorldPos[0]),
-					Math.max(0, this.changeBounds.min[1] - chunkWorldPos[1]),
-					Math.max(0, this.changeBounds.min[2] - chunkWorldPos[2]),
-				],
-				max: [
-					Math.min(gridSize - 1, this.changeBounds.max[0] - chunkWorldPos[0]),
-					Math.min(gridSize - 1, this.changeBounds.max[1] - chunkWorldPos[1]),
-					Math.min(gridSize - 1, this.changeBounds.max[2] - chunkWorldPos[2]),
-				],
-			};
-
-			// Validate bounds - if invalid, regenerate entire chunk
-			if (
-				localBounds.min[0] > localBounds.max[0] ||
-				localBounds.min[1] > localBounds.max[1] ||
-				localBounds.min[2] > localBounds.max[2]
-			) {
-				console.log("Invalid local bounds, regenerating entire chunk");
-				localBounds = undefined;
-			}
-		}
-
-		// Update mesh generation with chunk-local bounds
-		this.mesh.update(encoder, chunk, localBounds);
-
-		device.queue.submit([encoder.finish()]);
-
-		// Finalize mesh generation and copy packed data
-		const result = await this.mesh.finalizeMeshGeneration();
-		if (result && result.buffersResized) {
-			// Buffers were resized, need to recreate bind groups
-			this.block.unregisterChunk(chunk);
-			this.light.unregisterChunk(chunk);
-			this.block.registerChunk(chunk);
-			this.light.registerChunk(chunk);
-		}
+		// Update chunk data
+		chunk.setColors(result.colors as Uint32Array);
+		chunk.setNormals(result.normals as Float32Array);
+		chunk.setVertices(result.vertices as Float32Array);
+		chunk.setMaterialColors(result.material_colors as Uint32Array);
+		chunk.setCommands(result.commands as Uint32Array);
+		chunk.setDensities(result.densities as Uint32Array);
+		chunk.setVertexCounts(result.vertex_counts as Uint32Array);
 
 		// Invalidate lighting after voxel changes
 		this.light.invalidate(chunk);
