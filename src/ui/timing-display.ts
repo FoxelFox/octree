@@ -1,23 +1,16 @@
-export class TimingDisplay {
+import { UIPanel } from "./ui-panel";
+
+export class TimingDisplay extends UIPanel {
 	private timingDiv: HTMLDivElement;
 
 	constructor() {
-		this.timingDiv = document.createElement("div");
-		document.body.appendChild(this.timingDiv);
-		this.timingDiv.style.cssText = `
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      background: rgba(0, 0, 0, 0.8);
-      color: white;
-      min-width: 160px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 12px;
-      border-radius: 4px;
-      pointer-events: none;
-      z-index: 1000;
-    `;
+		super();
+		this.timingDiv = this.element as HTMLDivElement;
+		this.timingDiv.style.minWidth = '160px';
+	}
+
+	protected createElement(): HTMLElement {
+		return document.createElement("div");
 	}
 
 	public update(

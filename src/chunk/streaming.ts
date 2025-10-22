@@ -26,7 +26,7 @@ export class Streaming {
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	maxConcurrentGenerations = 1;
-	meshThreadsPerFrame = 256 * 256 * 256 * 256;
+
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
 
@@ -41,7 +41,6 @@ export class Streaming {
 
 	nextChunkId = 1;
 	activeChunks = new Set<Chunk>();
-	lastPlayerOctant: number[] = [0, 0, 0]; // Which half of the chunk player is in (0 or 1 for each axis)
 
 	get cameraPositionInGridSpace(): number[] {
 		return [

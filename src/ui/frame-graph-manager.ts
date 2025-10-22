@@ -1,21 +1,22 @@
 import { FrameGraph } from "./frame-graph";
+import { UIPanel } from "./ui-panel";
 
-export class FrameGraphManager {
+export class FrameGraphManager extends UIPanel {
   private frameGraph: FrameGraph;
-  private frameGraphContainer: HTMLDivElement;
 
   constructor() {
+    super();
     this.frameGraph = new FrameGraph();
-    this.frameGraphContainer = document.createElement("div");
-    this.frameGraphContainer.style.cssText = `
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      z-index: 1000;
-      pointer-events: auto;
-    `;
-    this.frameGraphContainer.appendChild(this.frameGraph.getElement());
-    document.body.appendChild(this.frameGraphContainer);
+    this.element.appendChild(this.frameGraph.getElement());
+    this.setPointerEvents(true);
+  }
+
+  protected createElement(): HTMLElement {
+    const container = document.createElement("div");
+    // Remove background from container since FrameGraph has its own
+    container.style.background = 'none';
+    container.style.padding = '0';
+    return container;
   }
 
   public getFrameGraph() {

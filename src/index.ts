@@ -2,6 +2,8 @@ import {GPUContext} from "./gpu";
 import {ContextUniform} from "./data/context";
 import {TimingDisplay} from "./ui/timing-display";
 import {FrameGraphManager} from "./ui/frame-graph-manager";
+import {QueueDisplay} from "./ui/queue-display";
+import {UIManager} from "./ui/ui-manager";
 import {Streaming} from "./chunk/streaming";
 import {Scheduler} from "./generation/scheduler";
 
@@ -28,8 +30,14 @@ const uniforms = [contextUniform];
 const streaming = new Streaming();
 
 // --- UI Components ---
+const uiManager = new UIManager();
 const timingDisplay = new TimingDisplay();
 const frameGraphManager = new FrameGraphManager();
+const queueDisplay = new QueueDisplay();
+
+uiManager.addPanel(timingDisplay, 'top-left');
+uiManager.addPanel(queueDisplay, 'top-left');
+uiManager.addPanel(frameGraphManager, 'top-right');
 
 function runOneTimeSetup() {
     gpu.update();
@@ -90,6 +98,16 @@ async function loop() {
             cpuFrameTime,
             stats,
             streaming.cull.count,
+        );
+
+        queueDisplay.update(
+            scheduler.queue.length,
+            scheduler.activeTasks.size,
+            scheduler.idle.length,
+            streaming.generationQueue.length,
+            streaming.pendingGenerations.length,
+            streaming.activeChunks.size,
+            streaming.grid.size,
         );
 
         requestAnimationFrame(loop);

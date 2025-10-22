@@ -229,6 +229,12 @@ export class GPUContext {
 			this.camera.velocity[0] -= right[0] * accel;
 			this.camera.velocity[2] -= right[2] * accel;
 		}
+		if (this.keys.has("space")) {
+			this.camera.velocity[1] += accel;
+		}
+		if (this.keys.has("keyc")) {
+			this.camera.velocity[1] -= accel;
+		}
 
 		// Apply friction
 		this.camera.velocity[0] *= this.camera.friction;
