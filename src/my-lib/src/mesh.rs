@@ -1,5 +1,4 @@
 use crate::noise::only_noise_for_chunk;
-use wasm_bindgen::prelude::wasm_bindgen;
 
 // Hand-crafted noise lookup table (256 values)
 const EDGE_TABLE_DATA: [u32; 256] = [
@@ -372,7 +371,6 @@ fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f
     }
 }
 
-#[wasm_bindgen]
 pub struct Command {
     vertex_count: u32,
     instance_count: u32,
@@ -380,7 +378,6 @@ pub struct Command {
     first_instance: u32,
 }
 
-#[wasm_bindgen]
 pub struct Chunk {
     densities: Vec<u32>,
     vertex_counts: Vec<u32>,
@@ -391,7 +388,6 @@ pub struct Chunk {
     colors: Vec<u32>,
 }
 
-#[wasm_bindgen]
 impl Chunk {
     pub fn densities(&self) -> *const u32 {
         self.densities.as_ptr()
@@ -450,7 +446,6 @@ impl Chunk {
     }
 }
 
-#[wasm_bindgen]
 pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
     const COMPRESSION: u32 = 8;
     let s_size = size / COMPRESSION;
