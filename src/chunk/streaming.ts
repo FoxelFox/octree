@@ -6,24 +6,24 @@ import {Light} from '../pipeline/rendering/light';
 import {VoxelEditorHandler} from '../ui/voxel-editor';
 import {VoxelEditor} from '../pipeline/generation/voxel_editor';
 
-type GenerationStage = 'create' | 'noise' | 'mesh' | 'light' | 'finalize';
+type GenerationStage = 'gpu_upload' | 'light' | 'finalize';
 
 interface GenerationTask {
 	index: number;
 	position: number[];
 	stage: GenerationStage;
-	chunk?: Chunk;
+	chunk: Chunk;
 	progress: number;
-	threadAccumulator?: number; // Accumulated threads for noise generation
+	noiseResult?: any; // Result from webworker noise generation
 }
 
 export class Streaming {
 	grid = new Map<number, Chunk>();
 	generationQueue: number[][] = []; // Queue of chunk positions to generate
-	pendingGenerations: GenerationTask[] = [];
+	pendingGenerations: GenerationTask[] = []; // Throttled queue for GPU upload, light, finalize
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
-	maxConcurrentGenerations = 1;
+	activeNoiseGenerations = new Set<number>(); // Chunks currently generating noise (not throttled)
 
 	renderDistance = 2.5;
 	pendingCleanup: Chunk[] = [];
@@ -162,7 +162,12 @@ export class Streaming {
 			return;
 		}
 
-		const currentTask = this.pendingGenerations[0];
+		// Prioritize GPU uploads first (they're the bottleneck)
+		let currentTask = this.pendingGenerations.find(t => t.stage === 'gpu_upload');
+		if (!currentTask) {
+			// If no GPU uploads pending, process next task (light or finalize)
+			currentTask = this.pendingGenerations[0];
+		}
 
 		// Process generation task without awaiting (non-blocking)
 		this.advanceGeneration(currentTask).then((completed) => {
@@ -175,8 +180,8 @@ export class Streaming {
 			} else {
 				// Move task to end of queue if not completed
 				const index = this.pendingGenerations.indexOf(currentTask);
-				if (index === 0) {
-					this.pendingGenerations.shift();
+				if (index !== -1) {
+					this.pendingGenerations.splice(index, 1);
 					this.pendingGenerations.push(currentTask);
 				}
 			}
@@ -186,9 +191,7 @@ export class Streaming {
 			if (index !== -1) {
 				this.pendingGenerations.splice(index, 1);
 			}
-			if (currentTask.chunk) {
-				this.inProgressGenerations.delete(currentTask.index);
-			}
+			this.inProgressGenerations.delete(currentTask.index);
 		});
 	}
 
@@ -342,74 +345,71 @@ export class Streaming {
 			});
 		}
 
-		while (
-			this.pendingGenerations.length < this.maxConcurrentGenerations &&
-			this.generationQueue.length > 0
-			) {
+		// Start noise generation for chunks (not throttled - webworkers handle their own scheduling)
+		while (this.generationQueue.length > 0) {
 			const position = this.generationQueue.shift()!;
 			const chunkIndex = this.map3D1D(position);
 			this.queuedChunks.delete(chunkIndex);
 
-			if (this.grid.has(chunkIndex) || this.inProgressGenerations.has(chunkIndex)) {
+			if (this.grid.has(chunkIndex) || this.inProgressGenerations.has(chunkIndex) || this.activeNoiseGenerations.has(chunkIndex)) {
 				continue;
 			}
 
-			this.inProgressGenerations.add(chunkIndex);
-			this.pendingGenerations.push({
-				index: chunkIndex,
-				position: [...position],
-				stage: 'create',
-				progress: 0,
-				threadAccumulator: 0,
-			});
+			// Start noise generation immediately (not throttled)
+			this.activeNoiseGenerations.add(chunkIndex);
+			this.startNoiseGeneration(position, chunkIndex);
 		}
+	}
+
+	private startNoiseGeneration(position: number[], chunkIndex: number) {
+		const chunk = this.initializeChunk(position);
+		console.log('Generating chunk:', position);
+
+		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], gridSize]).then(res => {
+			this.activeNoiseGenerations.delete(chunkIndex);
+
+			// Add to throttled queue for GPU upload
+			if (!this.inProgressGenerations.has(chunkIndex)) {
+				this.inProgressGenerations.add(chunkIndex);
+				this.pendingGenerations.push({
+					index: chunkIndex,
+					position: [...position],
+					stage: 'gpu_upload',
+					chunk: chunk,
+					progress: 0,
+					noiseResult: res,
+				});
+			}
+		}).catch((error) => {
+			console.error('Error in noise generation:', error);
+			this.activeNoiseGenerations.delete(chunkIndex);
+		});
 	}
 
 	private async advanceGeneration(task: GenerationTask): Promise<boolean> {
 		switch (task.stage) {
-			case 'create': {
-				const chunk = this.initializeChunk(task.position);
-				task.chunk = chunk;
-				console.log('Generating chunk:', task.position);
-				task.stage = 'noise';
-				task.progress = 0;
-				return false;
-			}
-			case 'noise': {
+			case 'gpu_upload': {
 				const chunk = task.chunk;
-				if (!chunk) {
-					throw new Error('Chunk missing for noise stage');
-				}
+				const res = task.noiseResult;
 
+				// Upload all mesh data to GPU (throttled to 1 chunk per frame)
+				chunk.setColors(res.colors as Uint32Array);
+				chunk.setNormals(res.normals as Float32Array);
+				chunk.setVertices(res.vertices as Float32Array);
+				chunk.setMaterialColors(res.material_colors as Uint32Array);
+				chunk.setCommands(res.commands as Uint32Array);
+				chunk.setDensities(res.densities as Uint32Array);
+				chunk.setVertexCounts(res.vertex_counts as Uint32Array);
 
-				if (task.progress === 0) {
-					task.progress = 1;
+				this.registerChunk(chunk);
 
-					scheduler.work("noise_for_chunk", [chunk.position[0], chunk.position[1], chunk.position[2], gridSize]).then(res => {
-						chunk.setColors(res.colors as Uint32Array);
-						chunk.setNormals(res.normals as Float32Array);
-						chunk.setVertices(res.vertices as Float32Array);
-						chunk.setMaterialColors(res.material_colors as Uint32Array);
-						chunk.setCommands(res.commands as Uint32Array);
-						chunk.setDensities(res.densities as Uint32Array);
-						chunk.setVertexCounts(res.vertex_counts as Uint32Array);
-
-						this.registerChunk(chunk);
-
-						task.stage = 'light';
-						task.progress = 0;
-						task.threadAccumulator = 0;
-					});
-				}
-
+				task.stage = 'light';
+				task.noiseResult = undefined; // Free memory
 				return false;
 			}
 
 			case 'light': {
 				const chunk = task.chunk;
-				if (!chunk) {
-					throw new Error('Chunk missing for light stage');
-				}
 				const encoder = device.createCommandEncoder();
 				// Run multiple light propagation iterations to fully stabilize lighting
 				for (let i = 0; i < 32; i++) {
@@ -422,9 +422,6 @@ export class Streaming {
 			}
 			case 'finalize': {
 				const chunk = task.chunk;
-				if (!chunk) {
-					throw new Error('Chunk missing for finalize stage');
-				}
 				this.grid.set(task.index, chunk);
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);

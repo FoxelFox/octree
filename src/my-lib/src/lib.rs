@@ -23,6 +23,95 @@ pub struct MeshMetadata {
     pub vertex_counts_length: usize,
 }
 
+#[wasm_bindgen]
+pub struct BufferSizes {
+    pub vertices_bytes: usize,
+    pub normals_bytes: usize,
+    pub colors_bytes: usize,
+    pub material_colors_bytes: usize,
+    pub commands_bytes: usize,
+    pub densities_bytes: usize,
+    pub vertex_counts_bytes: usize,
+}
+
+// Generate mesh and return typed arrays directly (wasm-bindgen handles efficient transfer)
+#[wasm_bindgen]
+pub struct MeshResult {
+    vertices: Float32Array,
+    normals: Float32Array,
+    colors: Uint32Array,
+    material_colors: Uint32Array,
+    commands: Uint32Array,
+    densities: Uint32Array,
+    vertex_counts: Uint32Array,
+}
+
+#[wasm_bindgen]
+impl MeshResult {
+    #[wasm_bindgen(getter)]
+    pub fn vertices(&self) -> Float32Array {
+        self.vertices.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn normals(&self) -> Float32Array {
+        self.normals.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn colors(&self) -> Uint32Array {
+        self.colors.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn material_colors(&self) -> Uint32Array {
+        self.material_colors.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn commands(&self) -> Uint32Array {
+        self.commands.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn densities(&self) -> Uint32Array {
+        self.densities.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn vertex_counts(&self) -> Uint32Array {
+        self.vertex_counts.clone()
+    }
+}
+
+#[wasm_bindgen]
+pub fn generate_mesh_direct(
+    x: i32,
+    y: i32,
+    z: i32,
+    size: u32,
+) -> MeshResult {
+    let chunk = mesh::generate_mesh(x, y, z, size);
+
+    unsafe {
+        // Create JS-owned copies of the data (not views into WASM memory)
+        let vertices_slice = std::slice::from_raw_parts(chunk.vertices(), chunk.vertices_len());
+        let normals_slice = std::slice::from_raw_parts(chunk.normals(), chunk.normals_len());
+        let colors_slice = std::slice::from_raw_parts(chunk.colors(), chunk.colors_len());
+        let material_colors_slice = std::slice::from_raw_parts(chunk.material_colors(), chunk.material_colors_len());
+        let commands_slice = std::slice::from_raw_parts(
+            chunk.commands() as *const u32,
+            chunk.commands_len() * 4 // 4 u32s per command
+        );
+        let densities_slice = std::slice::from_raw_parts(chunk.densities(), chunk.density_len());
+        let vertex_counts_slice = std::slice::from_raw_parts(chunk.vertex_counts(), chunk.vertex_counts_len());
+
+        MeshResult {
+            vertices: Float32Array::from(vertices_slice),
+            normals: Float32Array::from(normals_slice),
+            colors: Uint32Array::from(colors_slice),
+            material_colors: Uint32Array::from(material_colors_slice),
+            commands: Uint32Array::from(commands_slice),
+            densities: Uint32Array::from(densities_slice),
+            vertex_counts: Uint32Array::from(vertex_counts_slice),
+        }
+    }
+}
+
 // Generate mesh and write directly to SharedArrayBuffer-backed arrays
 #[wasm_bindgen]
 pub fn generate_mesh_to_shared(
