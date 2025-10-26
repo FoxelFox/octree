@@ -1,9 +1,11 @@
 #import "../../data/context.wgsl"
 
+// WebGPU DrawIndexedIndirect command format
 struct Command {
-	vertexCount: u32,
+	indexCount: u32,
 	instanceCount: u32,
-	firstVertex: u32,
+	firstIndex: u32,
+	baseVertex: i32,
 	firstInstance: u32,
 }
 
@@ -206,7 +208,8 @@ fn main(
 
     let declared_vertex_count = vertexCounts[meshlet_index];
     let command = commands[meshlet_index];
-    let vertex_count = min(declared_vertex_count, command.vertexCount);
+    // With indexed rendering, vertexCounts contains the actual unique vertex count
+    let vertex_count = declared_vertex_count;
 
     if (vertex_count == 0u) {
         return;
@@ -218,7 +221,8 @@ fn main(
     }
 
     // Calculate actual vertex index in the vertex buffer
-    let vertex_index = command.firstVertex + vertex_in_meshlet;
+    // baseVertex is the offset to the first vertex for this meshlet
+    let vertex_index = u32(command.baseVertex) + vertex_in_meshlet;
     if (vertex_index >= arrayLength(&vertices) || vertex_index >= arrayLength(&normals) || vertex_index >= arrayLength(&materialColors)) {
         return;
     }

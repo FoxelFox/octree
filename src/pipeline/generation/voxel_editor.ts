@@ -475,6 +475,9 @@ export class VoxelEditor {
 		chunk.setCommands(result.commands as Uint32Array);
 		chunk.setDensities(result.densities as Uint32Array);
 		chunk.setVertexCounts(result.vertex_counts as Uint32Array);
+		if (result.indices) {
+			chunk.setIndices(result.indices as Uint32Array);
+		}
 
 		// Invalidate lighting after voxel changes
 		this.light.invalidate(chunk);

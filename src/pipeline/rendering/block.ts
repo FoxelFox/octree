@@ -286,16 +286,21 @@ export class Block {
 			gBufferPass.setBindGroup(1, this.gBufferUniformBindGroup);
 
 			// Draw instances for each mesh chunk (only if culling data is ready)
-			if (chunk.indices && chunk.indices.length > 0) {
+			if (chunk.indicesArray && chunk.indicesArray.length > 0 && chunk.indicesBuffer) {
+				// Set index buffer for indexed rendering
+				gBufferPass.setIndexBuffer(chunk.indicesBuffer, "uint32");
+
 				const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
-				for (let i = 0; i < chunk.indices.length; ++i) {
-					const meshIndex = chunk.indices[i];
+				for (let i = 0; i < chunk.indicesArray.length; ++i) {
+					const meshIndex = chunk.indicesArray[i];
 					if (
 						typeof meshIndex === "number" &&
 						isFinite(meshIndex) &&
 						meshIndex <= maxMeshIndex
 					) {
-						gBufferPass.drawIndirect(chunk.commands, meshIndex * 16);
+						// Use indexed indirect draw (20 bytes per command: 5 u32s)
+						// Command format: indexCount, instanceCount, firstIndex, baseVertex, firstInstance
+						gBufferPass.drawIndexedIndirect(chunk.commands, meshIndex * 20);
 					} else if (meshIndex > maxMeshIndex) {
 						console.warn(
 							`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`,

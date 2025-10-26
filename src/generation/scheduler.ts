@@ -36,6 +36,7 @@ export class Scheduler {
 					commands: r.commands,
 					densities: r.densities,
 					vertex_counts: r.vertex_counts,
+					indices: r.indices,
 				};
 				task.resolve(data);
 

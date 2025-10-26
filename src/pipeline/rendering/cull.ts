@@ -478,7 +478,7 @@ export class Cull {
 
 		const indicesData = indicesReadback.getMappedRange();
 		const readSize = Math.min(newCount * 4, indicesBuffer.size);
-		chunk.indices = new Uint32Array(indicesData.slice(0, readSize));
+		chunk.indicesArray = new Uint32Array(indicesData.slice(0, readSize));
 		indicesReadback.unmap();
 
 		// Update count for this chunk

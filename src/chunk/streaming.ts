@@ -400,6 +400,12 @@ export class Streaming {
 				chunk.setCommands(res.commands as Uint32Array);
 				chunk.setDensities(res.densities as Uint32Array);
 				chunk.setVertexCounts(res.vertex_counts as Uint32Array);
+				if (res.indices) {
+					console.log(`Chunk ${chunk.id}: Setting indices buffer with ${res.indices.length} indices`);
+					chunk.setIndices(res.indices as Uint32Array);
+				} else {
+					console.warn(`Chunk ${chunk.id}: No indices in result!`);
+				}
 
 				this.registerChunk(chunk);
 

@@ -13,4 +13,5 @@ export interface Result {
     commands: Uint32Array
     densities: Uint32Array
     vertex_counts: Uint32Array
+    indices?: Uint32Array
 }
