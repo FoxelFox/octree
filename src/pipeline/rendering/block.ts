@@ -135,7 +135,7 @@ export class Block {
 		this.gBufferUniformBindGroup = device.createBindGroup({
 			label: "Block G-Buffer Context",
 			layout: this.gBufferPipeline.getBindGroupLayout(1),
-			entries: [{ binding: 0, resource: contextUniform.uniformBuffer }],
+			entries: [{ binding: 0, resource: { buffer: contextUniform.uniformBuffer } }],
 		});
 
 		this.createDeferredBindGroup();
@@ -381,7 +381,7 @@ export class Block {
 			label: "Deferred Context",
 			layout: this.deferredPipeline.getBindGroupLayout(0),
 			entries: [
-				{ binding: 0, resource: contextUniform.uniformBuffer },
+				{ binding: 0, resource: { buffer: contextUniform.uniformBuffer } },
 				{ binding: 1, resource: { buffer: chunkWorldPosBuffer } },
 			],
 		});

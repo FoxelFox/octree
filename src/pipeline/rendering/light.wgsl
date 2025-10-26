@@ -28,7 +28,7 @@ struct LightConfig {
 
 // Context data
 @group(1) @binding(0) var<uniform> context: Context;
-@group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
+@group(1) @binding(1) var<uniform> chunk_world_pos: vec4<i32>;
 
 // Use the to1DSmall function from context.wgsl
 

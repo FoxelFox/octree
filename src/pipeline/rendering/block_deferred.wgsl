@@ -5,7 +5,7 @@ const FOG_START = 128.0;
 const FOG_END = 512.0;
 
 @group(0) @binding(0) var<uniform> context: Context;
-@group(0) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
+@group(0) @binding(1) var<uniform> chunk_world_pos: vec4<i32>;
 @group(1) @binding(0) var positionTexture: texture_2d<f32>;
 @group(1) @binding(1) var normalTexture: texture_2d<f32>;
 @group(1) @binding(2) var diffuseTexture: texture_2d<f32>;

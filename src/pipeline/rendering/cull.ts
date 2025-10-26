@@ -183,19 +183,19 @@ export class Cull {
 			entries: [
 				{
 					binding: 0,
-					resource: counter,
+					resource: { buffer: counter },
 				},
 				{
 					binding: 1,
-					resource: {buffer: chunk.vertexCounts},
+					resource: { buffer: chunk.vertexCounts },
 				},
 				{
 					binding: 2,
-					resource: indicesBuffer,
+					resource: { buffer: indicesBuffer },
 				},
 				{
 					binding: 3,
-					resource: {buffer: combinedDensityBuffer},
+					resource: { buffer: combinedDensityBuffer },
 				},
 			],
 		});

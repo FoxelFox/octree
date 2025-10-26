@@ -5,7 +5,7 @@
 @group(0) @binding(1) var<storage, read> vertexCounts: array<u32>;
 @group(0) @binding(3) var<storage, read> combined_density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
-@group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
+@group(1) @binding(1) var<uniform> chunk_world_pos: vec4<i32>; // vec4 for Safari compatibility
 
 // Output
 @group(0) @binding(0) var<storage, read_write> counter: atomic<u32>;
@@ -43,7 +43,7 @@ fn index_from_offset(offset: vec3<i32>) -> u32 {
 fn sample_combined_density(world_pos: vec3<f32>) -> DensitySample {
 	let block_size = f32(COMPRESSION);
 	let world_block_pos = vec3<i32>(floor(world_pos / block_size));
-	let chunk_block_origin = vec3<i32>(floor(vec3<f32>(chunk_world_pos) / block_size));
+	let chunk_block_origin = vec3<i32>(floor(vec3<f32>(chunk_world_pos.xyz) / block_size));
 	let relative = world_block_pos - chunk_block_origin;
 	let block_count_i = i32(chunk_block_count());
 	let offset = vec3<i32>(floor(vec3<f32>(relative) / f32(block_count_i)));
@@ -66,7 +66,7 @@ fn sample_combined_density(world_pos: vec3<f32>) -> DensitySample {
 fn get_block_aabb(block_pos: vec3<u32>) -> AABB {
 	// Convert block position to world space by adding chunk offset
 	let local_pos = vec3<f32>(block_pos) * COMPRESSION;
-	let world_pos = local_pos + vec3<f32>(chunk_world_pos);
+	let world_pos = local_pos + vec3<f32>(chunk_world_pos.xyz);
 	var aabb: AABB;
 	aabb.min = world_pos;
 	aabb.max = world_pos + vec3<f32>(COMPRESSION);

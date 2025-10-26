@@ -32,11 +32,11 @@ struct Command {
 
 // Context
 @group(2) @binding(0) var<uniform> context: Context;
-@group(2) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
+@group(2) @binding(1) var<uniform> chunk_world_pos: vec4<i32>;
 
 // Convert world position to chunk-local compressed grid coordinates
 fn worldToCompressedGrid(world_pos: vec3<f32>) -> vec3<f32> {
-    let chunk_local_pos = world_pos - vec3<f32>(chunk_world_pos);
+    let chunk_local_pos = world_pos - vec3<f32>(chunk_world_pos.xyz);
     return chunk_local_pos / COMPRESSION;
 }
 

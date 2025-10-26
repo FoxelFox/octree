@@ -94,6 +94,19 @@ export class GPUContext {
 								maxColorAttachmentBytesPerSample: 32,
 							},
 						});
+
+						// Log device errors
+						this.device.addEventListener('uncapturederror', (event) => {
+							console.error('[WebGPU] Uncaptured error:', event.error);
+							if (event.error.message) {
+								console.error('[WebGPU] Error message:', event.error.message);
+							}
+						});
+
+						// Check device lost
+						this.device.lost.then((info) => {
+							console.error('[WebGPU] Device lost:', info.message, info.reason);
+						});
 					} catch (deviceError) {
 						errorMessage = `Failed to create WebGPU device: ${deviceError.message}`;
 					}
@@ -113,6 +126,7 @@ export class GPUContext {
 						? `<br><br><strong>Error details:</strong><br><code>${errorMessage}</code>`
 						: "") +
 					"</div> ";
+				return;
 			}
 		}
 		this.context = this.canvas.getContext("webgpu");

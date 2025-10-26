@@ -25,7 +25,7 @@ export class Streaming {
 	inProgressGenerations = new Set<number>();
 	activeNoiseGenerations = new Set<number>(); // Chunks currently generating noise (not throttled)
 
-	renderDistance = 2.5;
+	renderDistance = 4;
 	pendingCleanup: Chunk[] = [];
 
 	cull = new Cull();

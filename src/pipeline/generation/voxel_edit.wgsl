@@ -19,7 +19,7 @@ struct VoxelData {
 
 // Context
 @group(1) @binding(0) var<uniform> context: Context;
-@group(1) @binding(1) var<uniform> chunk_world_pos: vec3<i32>;
+@group(1) @binding(1) var<uniform> chunk_world_pos: vec4<i32>;
 
 // Convert world position to voxel grid coordinates
 fn worldToVoxel(world_pos: vec3<f32>) -> vec3<i32> {
@@ -69,7 +69,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let current_voxel = voxels[voxel_index];
 
     // Convert chunk-local voxel coordinates to world position
-    let voxel_world_pos = vec3<f32>(id) + vec3<f32>(chunk_world_pos);
+    let voxel_world_pos = vec3<f32>(id) + vec3<f32>(chunk_world_pos.xyz);
 
     // Calculate distance from edit center
     let dist_to_center = distance(voxel_world_pos, edit_params.position);
