@@ -1,7 +1,6 @@
 import {compression, contextUniform, device, gridSize} from "../../index";
 import shader from "./light.wgsl" with {type: "text"};
 import vertexLightShader from "./vertex_light.wgsl" with {type: "text"};
-import {RenderTimer} from "../timing";
 import {Chunk} from "../../chunk/chunk";
 
 export class Light {
@@ -17,8 +16,6 @@ export class Light {
 	vertexLightCombinedBuffers = new Map<Chunk, GPUBuffer>();
 	// Configuration uniforms
 	configBuffer: GPUBuffer;
-	// Timer for profiling
-	timer: RenderTimer;
 	// Per-chunk simulation state
 	private chunkIterationCounts = new Map<Chunk, number>();
 	private chunkNeedsUpdate = new Map<Chunk, boolean>();
@@ -32,7 +29,6 @@ export class Light {
 		const cellCount = sSize * sSize * sSize;
 		this.lightSegmentSize = cellCount * 8;
 
-		this.timer = new RenderTimer("light");
 		this.initBuffers();
 
 		// Create compute pipeline
@@ -60,10 +56,6 @@ export class Light {
 		});
 	}
 
-	get renderTime(): number {
-		return this.timer.renderTime;
-	}
-
 	update(encoder: GPUCommandEncoder, chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]) {
 		const needsUpdate = this.chunkNeedsUpdate.get(chunk) ?? false;
 		if (!needsUpdate) return;
@@ -85,7 +77,6 @@ export class Light {
 		// Run single pass of light propagation
 		const pass = encoder.beginComputePass({
 			label: `Light Propagation`,
-			timestampWrites: this.timer.getTimestampWrites(),
 		});
 
 		pass.setPipeline(this.pipeline);
@@ -102,10 +93,6 @@ export class Light {
 		);
 
 		pass.end();
-
-		if (this.timer.getTimestampWrites()) {
-			this.timer.resolveTimestamps(encoder);
-		}
 
 		const iterationCount = (this.chunkIterationCounts.get(chunk) ?? 0) + 1;
 		this.chunkIterationCounts.set(chunk, iterationCount);
@@ -168,10 +155,6 @@ export class Light {
 				this.chunkNeedsRebake.set(c, true);
 			}
 		}
-	}
-
-	afterUpdate() {
-		this.timer.readTimestamps();
 	}
 
 	// Dummy buffer for missing neighbors

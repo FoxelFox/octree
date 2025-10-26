@@ -1,6 +1,5 @@
 import {compression, contextUniform, device, gridSize} from "../../index";
 import shader from "./cull.wgsl" with {type: "text"};
-import {RenderTimer} from "../timing";
 import {Chunk} from "../../chunk/chunk";
 
 export class Cull {
@@ -23,7 +22,6 @@ export class Cull {
 
 	// output
 	private chunkCounts = new Map<Chunk, number>();
-	timer: RenderTimer;
 	private readbackInProgress = new Map<Chunk, boolean>();
 	private framesSinceUpdate = new Map<Chunk, number>();
 	private activeReadbackPromises = new Map<Chunk, Promise<void>>();
@@ -37,8 +35,6 @@ export class Cull {
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
 
 	constructor() {
-		this.timer = new RenderTimer("cull");
-
 		this.pipeline = device.createComputePipeline({
 			layout: "auto",
 			label: "Cull",
@@ -56,10 +52,6 @@ export class Cull {
 		this.neighborhoodDiameter = this.neighborhoodRadius * 2 + 1;
 		this.neighborhoodCount = Math.pow(this.neighborhoodDiameter, 3);
 		this.combinedDensitySize = this.densitySegmentSize * this.neighborhoodCount;
-	}
-
-	get renderTime(): number {
-		return this.timer.renderTime;
 	}
 
 	get count(): number {
@@ -95,9 +87,7 @@ export class Cull {
 		// Reset counter before culling
 		device.queue.writeBuffer(counter, 0, new Uint32Array([0]));
 
-		const pass = encoder.beginComputePass({
-			timestampWrites: this.timer.getTimestampWrites(),
-		});
+		const pass = encoder.beginComputePass();
 		pass.setPipeline(this.pipeline);
 		pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
 		pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
@@ -110,7 +100,6 @@ export class Cull {
 			workgroupsPerDim,
 		);
 		pass.end();
-		this.timer.resolveTimestamps(encoder);
 
 		// Track that this chunk needs readback after submission
 		const frames = (this.framesSinceUpdate.get(chunk) ?? 0) + 1;
@@ -119,7 +108,6 @@ export class Cull {
 
 
 	afterUpdate() {
-		this.timer.readTimestamps();
 		if (this.copyPerformedThisFrame) {
 			this.copyPerformedThisFrame = false;
 			this.needsRefresh = false;

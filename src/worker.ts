@@ -21,10 +21,6 @@ onmessage = async (e: MessageEvent<Request>) => {
 				e.data.args[3]
 			);
 
-			// Debug: Check if indices exist
-			console.log('Worker: meshResult.indices exists?', meshResult.indices !== undefined);
-			console.log('Worker: meshResult.indices length', meshResult.indices?.length);
-
 			// Copy from WASM memory to JS-owned typed arrays
 			const result: Result = {
 				id: e.data.id,

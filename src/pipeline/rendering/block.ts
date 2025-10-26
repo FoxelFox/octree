@@ -9,7 +9,6 @@ import {
 import shader from "./block.wgsl" with { type: "text" };
 import deferredShader from "./block_deferred.wgsl" with { type: "text" };
 import spaceBackgroundShader from "../generation/space_background.wgsl" with { type: "text" };
-import { RenderTimer } from "../timing";
 import { Chunk } from "../../chunk/chunk";
 
 export class Block {
@@ -31,7 +30,6 @@ export class Block {
 	spaceBackgroundBindGroup: GPUBindGroup;
 
 	initialized: boolean;
-	timer: RenderTimer;
 
 	// G-buffer textures
 	positionTexture: GPUTexture;
@@ -40,7 +38,6 @@ export class Block {
 	depthTexture: GPUTexture;
 
 	constructor() {
-		this.timer = new RenderTimer("block");
 		this.createGBufferTextures();
 		this.createSpaceBackgroundTexture();
 
@@ -151,10 +148,6 @@ export class Block {
 				{ binding: 0, resource: this.spaceBackgroundTexture.createView() },
 			],
 		});
-	}
-
-	get renderTime(): number {
-		return this.timer.renderTime;
 	}
 
 	createGBufferTextures() {
@@ -275,7 +268,6 @@ export class Block {
 				depthLoadOp: "clear",
 				depthStoreOp: "store",
 			},
-			timestampWrites: this.timer.getTimestampWrites(),
 		});
 
 		gBufferPass.setPipeline(this.gBufferPipeline);
@@ -338,14 +330,7 @@ export class Block {
 			deferredPass.end();
 			isFirstChunk = false;
 		}
-
-		this.timer.resolveTimestamps(commandEncoder);
 	}
-
-	afterUpdate() {
-		this.timer.readTimestamps();
-	}
-
 
 	createDeferredBindGroup() {
 		this.deferredBindGroup = device.createBindGroup({

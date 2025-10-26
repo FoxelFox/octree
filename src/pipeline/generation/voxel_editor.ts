@@ -1,6 +1,5 @@
 import { canvas, contextUniform, device, gridSize, scheduler } from "../../index";
 import editShader from "./voxel_edit.wgsl" with { type: "text" };
-import { RenderTimer } from "../timing";
 import { Chunk } from "../../chunk/chunk";
 import { Block } from "../rendering/block";
 import { Light } from "../rendering/light";
@@ -47,13 +46,11 @@ export class VoxelEditor {
 	private isProcessingEdits = false;
 	private pendingMeshUpdate = false;
 	private changeBounds: ChangeBounds | null = null;
-	private timer: RenderTimer;
 
 	constructor(block: Block, light: Light, cull: Cull) {
 		this.block = block;
 		this.light = light;
 		this.cull = cull;
-		this.timer = new RenderTimer("voxel_editor");
 
 		this.initPositionReading();
 		this.initVoxelEditing();
@@ -64,13 +61,6 @@ export class VoxelEditor {
 	 */
 	setNeighborChunkGetter(getter: (chunk: Chunk) => Chunk[]) {
 		this.getNeighborChunks = getter;
-	}
-
-	/**
-	 * Get render time for voxel editing operations
-	 */
-	get renderTime(): number {
-		return this.timer.renderTime;
 	}
 
 	/**
@@ -380,9 +370,7 @@ export class VoxelEditor {
 		}
 
 		const encoder = device.createCommandEncoder({ label: "Voxel Edit" });
-		const computePass = encoder.beginComputePass({
-			timestampWrites: this.timer.getTimestampWrites(),
-		});
+		const computePass = encoder.beginComputePass();
 
 		computePass.setPipeline(this.editPipeline);
 		computePass.setBindGroup(0, bindGroup);
@@ -401,11 +389,7 @@ export class VoxelEditor {
 		);
 
 		computePass.end();
-		this.timer.resolveTimestamps(encoder);
 		device.queue.submit([encoder.finish()]);
-
-		// Read timing after submission
-		this.timer.readTimestamps();
 	}
 
 	/**

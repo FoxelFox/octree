@@ -284,9 +284,7 @@ export class Streaming {
 	}
 
 	async afterUpdate() {
-		this.block.afterUpdate();
 		this.cull.afterUpdate();
-		this.light.afterUpdate();
 
 		// Now that GPU commands are submitted, cleanup chunks that are no longer needed
 		// Do this asynchronously without blocking the next frame
@@ -363,7 +361,6 @@ export class Streaming {
 
 	private startNoiseGeneration(position: number[], chunkIndex: number) {
 		const chunk = this.initializeChunk(position);
-		console.log('Generating chunk:', position);
 
 		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], gridSize]).then(res => {
 			this.activeNoiseGenerations.delete(chunkIndex);
@@ -400,12 +397,7 @@ export class Streaming {
 				chunk.setCommands(res.commands as Uint32Array);
 				chunk.setDensities(res.densities as Uint32Array);
 				chunk.setVertexCounts(res.vertex_counts as Uint32Array);
-				if (res.indices) {
-					console.log(`Chunk ${chunk.id}: Setting indices buffer with ${res.indices.length} indices`);
-					chunk.setIndices(res.indices as Uint32Array);
-				} else {
-					console.warn(`Chunk ${chunk.id}: No indices in result!`);
-				}
+				chunk.setIndices(res.indices as Uint32Array);
 
 				this.registerChunk(chunk);
 

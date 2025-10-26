@@ -15,8 +15,6 @@ export class TimingDisplay extends UIPanel {
 
 	public update(
 		currentRenderTime: number,
-		lightRenderTime: number,
-		cullRenderTime: number,
 		cpuFrameTime: number,
 		stats: {
 		fps: number;
@@ -26,8 +24,6 @@ export class TimingDisplay extends UIPanel {
 	) {
 		this.timingDiv.innerHTML = `
 			GPU Render: ${currentRenderTime.toFixed(3)} ms<br>
-			Light: ${lightRenderTime.toFixed(3)} ms<br>
-			Cull: ${cullRenderTime.toFixed(3)} ms<br>
 			CPU Frame: ${cpuFrameTime.toFixed(3)} ms<br>
 			FPS: ${stats ? stats.fps.toFixed(1) : "0.0"}<br>
 			Meshlets: ${meshletCount.toFixed(0)}<br>

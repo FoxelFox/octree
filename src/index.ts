@@ -22,9 +22,6 @@ export const time = gpu.time;
 export const compression = 8;
 export const contextUniform = new ContextUniform();
 
-console.log("maxDepth:", maxDepth);
-console.log("gridSize:", gridSize);
-
 const uniforms = [contextUniform];
 
 const streaming = new Streaming();
@@ -40,13 +37,13 @@ uiManager.addPanel(queueDisplay, 'top-left');
 uiManager.addPanel(frameGraphManager, 'top-right');
 
 function runOneTimeSetup() {
-    gpu.update();
+	gpu.update();
 
-    for (const uniform of uniforms) {
-        uniform.update();
-    }
+	for (const uniform of uniforms) {
+		uniform.update();
+	}
 
-    streaming.init();
+	streaming.init();
 }
 
 runOneTimeSetup();
@@ -54,63 +51,61 @@ loop();
 
 // this has to be set after first render loop due to safari bug
 document
-    .getElementsByTagName("canvas")[0]
-    .setAttribute("style", "position: fixed;");
+	.getElementsByTagName("canvas")[0]
+	.setAttribute("style", "position: fixed;");
 
 let lastFrame = performance.now();
 
 async function loop() {
-    let now = performance.now();
-    const time = now - lastFrame;
-    lastFrame = now;
+	let now = performance.now();
+	const time = now - lastFrame;
+	lastFrame = now;
 
 
-    gpu.update();
+	gpu.update();
 
-    // Handle voxel editing when the pointer is locked and in Block mode
-    if (streaming.voxelEditor && gpu.mouse.locked) {
-        streaming.voxelEditorHandler.handleVoxelEditing();
-    }
+	// Handle voxel editing when the pointer is locked and in Block mode
+	if (streaming.voxelEditor && gpu.mouse.locked) {
+		streaming.voxelEditorHandler.handleVoxelEditing();
+	}
 
-    for (const uniform of uniforms) {
-        uniform.update();
-    }
+	for (const uniform of uniforms) {
+		uniform.update();
+	}
 
-    const updateEncoder = device.createCommandEncoder();
-    streaming.update(updateEncoder);
-    device.queue.submit([updateEncoder.finish()]);
-    streaming.afterUpdate().then(() => {
-        // Update the frame graph with GPU render time from the active renderer
-        frameGraphManager.getFrameGraph().addFrameTime(time);
-        frameGraphManager.render();
+	const updateEncoder = device.createCommandEncoder();
+	streaming.update(updateEncoder);
+	device.queue.submit([updateEncoder.finish()]);
+	streaming.afterUpdate().then(() => {
+		// Update the frame graph with GPU render time from the active renderer
+		frameGraphManager.getFrameGraph().addFrameTime(time);
+		frameGraphManager.render();
 
-        // Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
-        const frameEnd = performance.now();
-        const cpuFrameTime = frameEnd - now;
+		// Calculate CPU frame time (excludes GPU work) - moved to capture all CPU work
+		const frameEnd = performance.now();
+		const cpuFrameTime = frameEnd - now;
 
-        // Update timing display
-        const stats = frameGraphManager.getFrameGraph().getCurrentStats();
+		// Update timing display
+		const stats = frameGraphManager.getFrameGraph().getCurrentStats();
 
-        timingDisplay.update(
-            time,
-            streaming.light.renderTime,
-            streaming.cull.renderTime,
-            cpuFrameTime,
-            stats,
-            streaming.cull.count,
-        );
+		timingDisplay.update(
+			time,
+			cpuFrameTime,
+			stats,
+			streaming.cull.count,
+		);
 
-        queueDisplay.update(
-            scheduler.queue.length,
-            scheduler.activeTasks.size,
-            scheduler.idle.length,
-            streaming.generationQueue.length,
-            streaming.pendingGenerations.length,
-            streaming.activeChunks.size,
-            streaming.grid.size,
-        );
+		queueDisplay.update(
+			scheduler.queue.length,
+			scheduler.activeTasks.size,
+			scheduler.idle.length,
+			streaming.generationQueue.length,
+			streaming.pendingGenerations.length,
+			streaming.activeChunks.size,
+			streaming.grid.size,
+		);
 
-        requestAnimationFrame(loop);
+		requestAnimationFrame(loop);
 
-    });
+	});
 }
