@@ -1,6 +1,6 @@
 import {Request, Result} from "./generation/message";
 
-import init, {generate_mesh_direct} from "src/my-lib/pkg"
+import init, {generate_mesh} from "src/my-lib/pkg"
 
 let initialized = false;
 
@@ -14,7 +14,7 @@ onmessage = async (e: MessageEvent<Request>) => {
 	switch (e.data.operation) {
 		case 'noise_for_chunk':
 			// Generate mesh and get typed arrays directly from Rust
-			const meshResult = generate_mesh_direct(
+			const meshResult = generate_mesh(
 				e.data.args[0],
 				e.data.args[1],
 				e.data.args[2],

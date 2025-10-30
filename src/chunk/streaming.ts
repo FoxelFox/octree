@@ -362,7 +362,7 @@ export class Streaming {
 	private startNoiseGeneration(position: number[], chunkIndex: number) {
 		const chunk = this.initializeChunk(position);
 
-		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], gridSize]).then(res => {
+		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], 0]).then(res => {
 			this.activeNoiseGenerations.delete(chunkIndex);
 
 			// Add to throttled queue for GPU upload

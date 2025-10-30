@@ -1,7 +1,6 @@
 use crate::noise::only_noise_for_chunk;
 use rustc_hash::FxHashMap;
 
-// Hand-crafted noise lookup table (256 values)
 const EDGE_TABLE_DATA: [u32; 256] = [
     0x0, 0x109, 0x203, 0x30a, 0x406, 0x50f, 0x605, 0x70c, 0x80c, 0x905, 0xa0f, 0xb06, 0xc0a, 0xd03,
     0xe09, 0xf00, 0x190, 0x99, 0x393, 0x29a, 0x596, 0x49f, 0x795, 0x69c, 0x99c, 0x895, 0xb9f,
@@ -24,6 +23,7 @@ const EDGE_TABLE_DATA: [u32; 256] = [
     0x596, 0x29a, 0x393, 0x99, 0x190, 0xf00, 0xe09, 0xd03, 0xc0a, 0xb06, 0xa0f, 0x905, 0x80c,
     0x70c, 0x605, 0x50f, 0x406, 0x30a, 0x203, 0x109, 0x0,
 ];
+
 const TRIANGLE_TABLE_DATA: [i32; 4096] = [
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 8, 3, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, 9, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 1,
@@ -184,7 +184,7 @@ const TRIANGLE_TABLE_DATA: [i32; 4096] = [
 #[derive(Clone, Copy)]
 struct VoxelData {
     density: f32,
-    color: u32, // Packed RGBA color
+    color: u32,         // Packed RGBA color
     gradient: [f32; 3], // Pre-computed normal
 }
 
@@ -292,9 +292,16 @@ fn interpolate_normal(n1: [f32; 3], n2: [f32; 3], val1: f32, val2: f32) -> [f32;
     ];
 
     // Inline normalize for interpolated
-    let len = (interpolated[0] * interpolated[0] + interpolated[1] * interpolated[1] + interpolated[2] * interpolated[2]).sqrt();
+    let len = (interpolated[0] * interpolated[0]
+        + interpolated[1] * interpolated[1]
+        + interpolated[2] * interpolated[2])
+        .sqrt();
     if len > 0.0 {
-        [interpolated[0] / len, interpolated[1] / len, interpolated[2] / len]
+        [
+            interpolated[0] / len,
+            interpolated[1] / len,
+            interpolated[2] / len,
+        ]
     } else {
         interpolated
     }
@@ -324,11 +331,11 @@ fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f
 // WebGPU DrawIndexedIndirect command format
 #[repr(C)]
 pub struct Command {
-    index_count: u32,      // Number of indices to draw
-    instance_count: u32,   // Number of instances to draw
-    first_index: u32,      // First index in the index buffer
-    base_vertex: i32,      // Value added to vertex index before indexing into vertex buffer
-    first_instance: u32,   // First instance ID
+    index_count: u32,    // Number of indices to draw
+    instance_count: u32, // Number of instances to draw
+    first_index: u32,    // First index in the index buffer
+    base_vertex: i32,    // Value added to vertex index before indexing into vertex buffer
+    first_instance: u32, // First instance ID
 }
 
 // Vertex key for deduplication - combines position, normal, and color
@@ -348,7 +355,11 @@ impl VertexKey {
                 position[1].to_bits(),
                 position[2].to_bits(),
             ],
-            normal: [normal[0].to_bits(), normal[1].to_bits(), normal[2].to_bits()],
+            normal: [
+                normal[0].to_bits(),
+                normal[1].to_bits(),
+                normal[2].to_bits(),
+            ],
             color,
         }
     }
@@ -431,14 +442,14 @@ impl Chunk {
     }
 }
 
-pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
+pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: u32) -> Chunk {
     const COMPRESSION: u32 = 8;
-    let s_size = size / COMPRESSION;
+    let s_size = resolution / COMPRESSION;
 
-    let density_data = only_noise_for_chunk(x, y, z, size);
+    let density_data = only_noise_for_chunk(x, y, z, resolution);
 
     // Convert density data to VoxelData with colors and pre-compute gradients
-    let voxel_size = size + 1;
+    let voxel_size = resolution + 1;
     let total_voxels = (voxel_size * voxel_size * voxel_size) as usize;
     let mut voxels = Vec::with_capacity(total_voxels);
 
@@ -471,14 +482,18 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
         for y in 0..voxel_size {
             for x in 0..voxel_size {
                 let pos = [x as i32, y as i32, z as i32];
-                let gradient = calculate_gradient(&voxels, pos, size);
+                let gradient = calculate_gradient(&voxels, pos, resolution);
                 let idx = (z * voxel_size * voxel_size + y * voxel_size + x) as usize;
                 voxels[idx].gradient = gradient;
             }
         }
     }
 
-    let chunk_world_pos = [x * size as i32, y * size as i32, z * size as i32];
+    let chunk_world_pos = [
+        x * resolution as i32,
+        y * resolution as i32,
+        z * resolution as i32,
+    ];
 
     let mut all_vertices = Vec::new();
     let mut all_normals = Vec::new();
@@ -497,8 +512,10 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
 
                 // Pre-allocate with estimated capacity
                 // Max vertices per meshlet: COMPRESSION³ cubes × ~15 triangles × 3 vertices / ~3 (sharing factor)
-                const ESTIMATED_VERTS_PER_MESHLET: usize = (COMPRESSION * COMPRESSION * COMPRESSION * 15) as usize;
-                const ESTIMATED_INDICES_PER_MESHLET: usize = (COMPRESSION * COMPRESSION * COMPRESSION * 15 * 3) as usize;
+                const ESTIMATED_VERTS_PER_MESHLET: usize =
+                    (COMPRESSION * COMPRESSION * COMPRESSION * 15) as usize;
+                const ESTIMATED_INDICES_PER_MESHLET: usize =
+                    (COMPRESSION * COMPRESSION * COMPRESSION * 15 * 3) as usize;
 
                 let mut local_positions = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
                 let mut local_normals = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
@@ -506,7 +523,7 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
                 let mut local_indices = Vec::with_capacity(ESTIMATED_INDICES_PER_MESHLET);
                 let mut vertex_map: FxHashMap<VertexKey, u32> = FxHashMap::with_capacity_and_hasher(
                     ESTIMATED_VERTS_PER_MESHLET,
-                    Default::default()
+                    Default::default(),
                 );
                 let mut density = 0;
 
@@ -532,7 +549,8 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
                                     world_pos[1] + corner_offset[1] as i32,
                                     world_pos[2] + corner_offset[2] as i32,
                                 ];
-                                let (density, color, gradient) = get_voxel_all_safe(&voxels, pos, size);
+                                let (density, color, gradient) =
+                                    get_voxel_all_safe(&voxels, pos, resolution);
                                 cube_values[i] = density;
                                 cube_colors[i] = color;
                                 cube_gradients[i] = gradient;
@@ -660,9 +678,21 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, size: u32) -> Chunk {
                                     ];
 
                                     // Add vertices (reusing if duplicate)
-                                    let idx1 = add_vertex(v1_world, normal_list[edge1_idx], color_list[edge1_idx]);
-                                    let idx2 = add_vertex(v2_world, normal_list[edge2_idx], color_list[edge2_idx]);
-                                    let idx3 = add_vertex(v3_world, normal_list[edge3_idx], color_list[edge3_idx]);
+                                    let idx1 = add_vertex(
+                                        v1_world,
+                                        normal_list[edge1_idx],
+                                        color_list[edge1_idx],
+                                    );
+                                    let idx2 = add_vertex(
+                                        v2_world,
+                                        normal_list[edge2_idx],
+                                        color_list[edge2_idx],
+                                    );
+                                    let idx3 = add_vertex(
+                                        v3_world,
+                                        normal_list[edge3_idx],
+                                        color_list[edge3_idx],
+                                    );
 
                                     // Add triangle indices
                                     local_indices.push(idx1);
