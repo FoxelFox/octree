@@ -66,56 +66,32 @@ fn sample_noise(x: f32, y: f32, z: f32) -> f32 {
     nxy0 * (1.0 - sz) + nxy1 * sz
 }
 
-fn generate_sin_noise(pos: [u32; 3], chunk_offset: [i32; 3]) -> f32 {
-    let world_pos = [
-        pos[0] as f32 + chunk_offset[0] as f32,
-        pos[1] as f32 + chunk_offset[1] as f32,
-        pos[2] as f32 + chunk_offset[2] as f32,
-    ];
-
+fn generate_sin_noise(pos: [f32; 3]) -> f32 {
     // Multi-octave noise terrain
     // Large scale features
     let scale1 = 0.02;
-    let octave1 = sample_noise(
-        world_pos[0] * scale1,
-        world_pos[1] * scale1,
-        world_pos[2] * scale1,
-    ) * 30.0;
+    let octave1 = sample_noise(pos[0] * scale1, pos[1] * scale1, pos[2] * scale1) * 30.0;
 
     // Medium scale features
     let scale2 = 0.05;
-    let octave2 = sample_noise(
-        world_pos[0] * scale2,
-        world_pos[1] * scale2,
-        world_pos[2] * scale2,
-    ) * 15.0;
+    let octave2 = sample_noise(pos[0] * scale2, pos[1] * scale2, pos[2] * scale2) * 15.0;
 
     // Fine detail
     let scale3 = 0.15;
-    let octave3 = sample_noise(
-        world_pos[0] * scale3,
-        world_pos[1] * scale3,
-        world_pos[2] * scale3,
-    ) * 5.0;
+    let octave3 = sample_noise(pos[0] * scale3, pos[1] * scale3, pos[2] * scale3) * 5.0;
 
     // Combine layers
     let surface_height = 128.0 + octave1 + octave2 + octave3;
 
     // SDF: distance from current Y to surface
-    world_pos[1] - surface_height // negative below, positive above
+    pos[1] - surface_height // negative below, positive above
 }
 
-fn generate_sin_color(pos: [u32; 3], chunk_offset: [i32; 3]) -> u32 {
-    let world_pos = [
-        pos[0] as f32 + chunk_offset[0] as f32,
-        pos[1] as f32 + chunk_offset[1] as f32,
-        pos[2] as f32 + chunk_offset[2] as f32,
-    ];
-
+fn generate_sin_color(pos: [f32; 3]) -> u32 {
     // Convert to packed RGBA (with full alpha)
-    let r = ((world_pos[0] / 80.0).sin() * 255.0) as u32 & 0xFF;
-    let g = ((world_pos[1] / 80.0).sin() * 255.0) as u32 & 0xFF;
-    let b = ((world_pos[2] / 80.0).sin() * 255.0) as u32 & 0xFF;
+    let r = ((pos[0] / 80.0).sin() * 255.0) as u32 & 0xFF;
+    let g = ((pos[1] / 80.0).sin() * 255.0) as u32 & 0xFF;
+    let b = ((pos[2] / 80.0).sin() * 255.0) as u32 & 0xFF;
     let a = 255u32;
 
     (a << 24) | (b << 16) | (g << 8) | r
@@ -139,8 +115,14 @@ pub fn noise_for_chunk(x: i32, y: i32, z: i32, size: u32) -> Box<[f32]> {
             for vx in 0..voxel_size {
                 let pos = [vx, vy, vz];
 
-                let density = generate_sin_noise(pos, chunk_offset);
-                let color = generate_sin_color(pos, chunk_offset);
+                let world_pos = [
+                    pos[0] as f32 + chunk_offset[0] as f32,
+                    pos[1] as f32 + chunk_offset[1] as f32,
+                    pos[2] as f32 + chunk_offset[2] as f32,
+                ];
+
+                let density = generate_sin_noise(world_pos);
+                let color = generate_sin_color(world_pos);
 
                 // Store density as f32
                 result.push(density);
@@ -164,7 +146,12 @@ pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, size: u32) -> Vec<f32> {
         for vy in 0..voxel_size {
             for vx in 0..voxel_size {
                 let pos = [vx, vy, vz];
-                let density = generate_sin_noise(pos, chunk_offset);
+                let world_pos = [
+                    pos[0] as f32 + chunk_offset[0] as f32,
+                    pos[1] as f32 + chunk_offset[1] as f32,
+                    pos[2] as f32 + chunk_offset[2] as f32,
+                ];
+                let density = generate_sin_noise(world_pos);
 
                 result.push(density);
             }
