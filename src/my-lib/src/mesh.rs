@@ -442,7 +442,7 @@ impl Chunk {
     }
 }
 
-pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: u32) -> Chunk {
+pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chunk {
     const COMPRESSION: u32 = 8;
     let s_size = resolution / COMPRESSION;
 
@@ -589,6 +589,16 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: u32) -> Chu
                                     let v1 = EDGE_VERTICES[i][0];
                                     let v2 = EDGE_VERTICES[i][1];
 
+                                    // let p1 = [
+                                    //     (world_pos[0] as f32 + CUBE_VERTICES[v1][0]) * scale,
+                                    //     (world_pos[1] as f32 + CUBE_VERTICES[v1][1]) * scale,
+                                    //     (world_pos[2] as f32 + CUBE_VERTICES[v1][2]) * scale,
+                                    // ];
+                                    // let p2 = [
+                                    //     (world_pos[0] as f32 + CUBE_VERTICES[v2][0]) * scale,
+                                    //     (world_pos[1] as f32 + CUBE_VERTICES[v2][1]) * scale,
+                                    //     (world_pos[2] as f32 + CUBE_VERTICES[v2][2]) * scale,
+                                    // ];
                                     let p1 = [
                                         world_pos[0] as f32 + CUBE_VERTICES[v1][0],
                                         world_pos[1] as f32 + CUBE_VERTICES[v1][1],

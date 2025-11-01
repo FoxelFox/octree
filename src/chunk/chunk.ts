@@ -42,30 +42,6 @@ export class Chunk {
 				GPUBufferUsage.COPY_SRC,
 		});
 
-		// Separate buffers for mesh data
-		this.vertexCounts = device.createBuffer({
-			label: `${this.chunkLabel} Vertex Counts`,
-			size: 4 * sSize3, // u32 = 4 bytes each
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		});
-
-		this.commands = device.createBuffer({
-			label: `${this.chunkLabel} Commands`,
-			size: 20 * sSize3, // DrawIndexedIndirect: 5 u32s = 20 bytes per command
-			usage:
-				GPUBufferUsage.STORAGE |
-				GPUBufferUsage.COPY_SRC |
-				GPUBufferUsage.COPY_DST |
-				GPUBufferUsage.INDIRECT,
-		});
-
-		this.density = device.createBuffer({
-			label: `${this.chunkLabel} Density`,
-			size: 4 * sSize3,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-		});
-
-
 		// Create light buffer: stores light intensity (R) and shadow factor (G) for each compressed cell
 		// Format: RG32Float - R = light intensity, G = shadow factor (0.0 = fully lit, 1.0 = fully shadowed)
 		this.light = device.createBuffer({
@@ -140,14 +116,49 @@ export class Chunk {
 	}
 
 	setVertexCounts(data: Uint32Array) {
+
+		if (this.vertexCounts) {
+			this.vertexCounts.destroy();
+		}
+
+		this.vertexCounts = device.createBuffer({
+			label: `${this.chunkLabel} Vertex Counts`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		});
+
 		device.queue.writeBuffer(this.vertexCounts, 0, data);
 	}
 
 	setDensities(data: Uint32Array) {
+		if (this.density) {
+			this.density.destroy();
+		}
+
+		this.density = device.createBuffer({
+			label: `${this.chunkLabel} Density`,
+			size: data.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		});
+
 		device.queue.writeBuffer(this.density, 0, data);
 	}
 
 	setCommands(data: Uint32Array) {
+		if (this.commands) {
+			this.commands.destroy();
+		}
+
+		this.commands = device.createBuffer({
+			label: `${this.chunkLabel} Commands`,
+			size: data.byteLength,
+			usage:
+				GPUBufferUsage.STORAGE |
+				GPUBufferUsage.COPY_SRC |
+				GPUBufferUsage.COPY_DST |
+				GPUBufferUsage.INDIRECT,
+		});
+
 		device.queue.writeBuffer(this.commands, 0, data);
 	}
 

@@ -34,6 +34,8 @@ onmessage = async (e: MessageEvent<Request>) => {
 				indices: meshResult.indices ? new Uint32Array(meshResult.indices) : undefined,
 			};
 
+			console.log(result)
+
 			// Send back data (will be transferred efficiently via structured clone)
 			postMessage(result);
 			break;

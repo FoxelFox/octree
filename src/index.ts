@@ -104,8 +104,9 @@ async function initializeApp() {
 				streaming.grid.size,
 			);
 
-			requestAnimationFrame(loop);
-
+			if (!gpu.hasError) {
+				requestAnimationFrame(loop);
+			}
 		}).catch(error => {
 			console.error("[Main] Error in afterUpdate:", error);
 			throw error;

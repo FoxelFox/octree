@@ -1,5 +1,8 @@
 use wasm_bindgen::prelude::wasm_bindgen;
 
+// Fixed world space size for one chunk
+pub const SIZE: i32 = 256;
+
 // Hand-crafted noise lookup table (256 values)
 const NOISE_TABLE: [u8; 256] = [
     151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69,
@@ -102,9 +105,9 @@ fn generate_sin_color(pos: [f32; 3]) -> u32 {
 /// Format: [density0, color0_as_f32, density1, color1_as_f32, ...]
 /// Each pair represents one voxel (8 bytes total: f32 + u32 reinterpreted as f32)
 #[wasm_bindgen]
-pub fn noise_for_chunk(x: i32, y: i32, z: i32, size: u32) -> Box<[f32]> {
-    let voxel_size = size + 1; // 257 for gridSize 256
-    let chunk_offset = [x * size as i32, y * size as i32, z * size as i32];
+pub fn noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32) -> Box<[f32]> {
+    let voxel_size = resolution + 1; // 257 for gridSize 256
+    let chunk_offset = [x * SIZE, y * SIZE, z * SIZE];
 
     let total_voxels = (voxel_size * voxel_size * voxel_size) as usize;
     let mut result = Vec::with_capacity(total_voxels * 2); // density + color per voxel
@@ -135,9 +138,9 @@ pub fn noise_for_chunk(x: i32, y: i32, z: i32, size: u32) -> Box<[f32]> {
     result.into_boxed_slice()
 }
 
-pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, size: u32) -> Vec<f32> {
-    let voxel_size = size + 1; // 257 for gridSize 256
-    let chunk_offset = [x * size as i32, y * size as i32, z * size as i32];
+pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32) -> Vec<f32> {
+    let voxel_size = resolution + 1; // 257 for gridSize 256
+    let chunk_offset = [x * SIZE, y * SIZE, z * SIZE];
 
     let total_voxels = (voxel_size * voxel_size * voxel_size) as usize;
     let mut result = Vec::with_capacity(total_voxels);

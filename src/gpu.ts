@@ -30,6 +30,7 @@ export class GPUContext {
 	taaToggle: {
 		lastTKeyPressed: boolean;
 	};
+	hasError: boolean;
 
 	constructor() {
 		this.canvas = document.getElementsByTagName("canvas")[0];
@@ -101,6 +102,7 @@ export class GPUContext {
 							if (event.error.message) {
 								console.error('[WebGPU] Error message:', event.error.message);
 							}
+							this.hasError = true;
 						});
 
 						// Check device lost
