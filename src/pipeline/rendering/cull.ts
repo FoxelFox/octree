@@ -14,6 +14,7 @@ export class Cull {
 	chunkBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
+	chunkResolutionBuffers = new Map<Chunk, GPUBuffer>();
 	chunkCombinedDensityBuffers = new Map<Chunk, GPUBuffer>();
 	private chunkDirty = new Map<Chunk, boolean>();
 	private needsRefresh = true;
@@ -92,8 +93,9 @@ export class Cull {
 		pass.setBindGroup(0, this.chunkBindGroups.get(chunk));
 		pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
-		// Dispatch with 4x4x4 workgroup size
-		const workgroupsPerDim = Math.ceil(gridSize / compression / 4);
+		// Dispatch with 4x4x4 workgroup size based on chunk's actual resolution
+		const meshletCountPerDim = chunk.resolution / compression;
+		const workgroupsPerDim = Math.ceil(meshletCountPerDim / 4);
 		pass.dispatchWorkgroups(
 			workgroupsPerDim,
 			workgroupsPerDim,
@@ -207,16 +209,30 @@ export class Cull {
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 
-		// Write chunk world position (in voxels)
+		// Write chunk world position (in world space units, always 256 per chunk)
 		const chunkWorldPosData = new Int32Array([
-			chunk.position[0] * gridSize,
-			chunk.position[1] * gridSize,
-			chunk.position[2] * gridSize,
+			chunk.position[0] * 256,
+			chunk.position[1] * 256,
+			chunk.position[2] * 256,
 			0 // padding
 		]);
 		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
 
-		// Create context bind group with chunk world position
+		// Create chunk resolution buffer
+		const chunkResolutionBuffer = device.createBuffer({
+			label: `${chunkLabel} Cull Resolution`,
+			size: 16, // u32 + padding = 16 bytes for alignment
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk resolution
+		const chunkResolutionData = new Uint32Array([
+			chunk.resolution,
+			0, 0, 0 // padding
+		]);
+		device.queue.writeBuffer(chunkResolutionBuffer, 0, chunkResolutionData);
+
+		// Create context bind group with chunk world position and resolution
 		const contextBindGroup = device.createBindGroup({
 			label: `${chunkLabel} Cull Context Bind Group`,
 			layout: this.pipeline.getBindGroupLayout(1),
@@ -229,12 +245,17 @@ export class Cull {
 					binding: 1,
 					resource: {buffer: chunkWorldPosBuffer},
 				},
+				{
+					binding: 2,
+					resource: {buffer: chunkResolutionBuffer},
+				},
 			],
 		});
 
 		this.chunkBindGroups.set(chunk, bindGroup);
 		this.chunkContextBindGroups.set(chunk, contextBindGroup);
 		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+		this.chunkResolutionBuffers.set(chunk, chunkResolutionBuffer);
 
 		// Initialize per-chunk state
 		this.readbackInProgress.set(chunk, false);
@@ -260,6 +281,7 @@ export class Cull {
 		const indicesBuffer = this.chunkIndicesBuffers.get(chunk);
 		const indicesReadback = this.chunkIndicesReadbacks.get(chunk);
 		const worldPosBuffer = this.chunkWorldPosBuffers.get(chunk);
+		const resolutionBuffer = this.chunkResolutionBuffers.get(chunk);
 		const combinedDensityBuffer = this.chunkCombinedDensityBuffers.get(chunk);
 
 		counter?.destroy();
@@ -267,6 +289,7 @@ export class Cull {
 		indicesBuffer?.destroy();
 		indicesReadback?.destroy();
 		worldPosBuffer?.destroy();
+		resolutionBuffer?.destroy();
 		combinedDensityBuffer?.destroy();
 
 		// Clean up maps
@@ -277,6 +300,7 @@ export class Cull {
 		this.chunkBindGroups.delete(chunk);
 		this.chunkContextBindGroups.delete(chunk);
 		this.chunkWorldPosBuffers.delete(chunk);
+		this.chunkResolutionBuffers.delete(chunk);
 		this.chunkCombinedDensityBuffers.delete(chunk);
 		this.chunkDirty.delete(chunk);
 		this.readbackInProgress.delete(chunk);
@@ -354,12 +378,16 @@ export class Cull {
 
 		for (let i = 0; i < this.neighborhoodCount; i++) {
 			const source = sources[i];
+			// Use the actual buffer size (supports variable LOD chunk sizes)
+			const copySize = source.size;
+			// Pad each segment to densitySegmentSize to keep uniform layout
+			const offset = i * this.densitySegmentSize;
 			encoder.copyBufferToBuffer(
 				source,
 				0,
 				combinedBuffer,
-				i * this.densitySegmentSize,
-				this.densitySegmentSize,
+				offset,
+				Math.min(copySize, this.densitySegmentSize),
 			);
 		}
 

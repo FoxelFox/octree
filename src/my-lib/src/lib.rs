@@ -87,8 +87,8 @@ impl MeshResult {
 
 #[wasm_bindgen]
 pub fn generate_mesh(x: i32, y: i32, z: i32, lod: u32) -> MeshResult {
-    let resolution = 256 / (lod + 1);
     let scale = 2_u32.pow(lod) as f32;
+    let resolution = (256.0 / scale) as u32;
 
     let chunk = mesh::generate_mesh(x, y, z, resolution, scale);
 

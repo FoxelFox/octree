@@ -13,6 +13,7 @@ export class Light {
 	chunkContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	vertexLightContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
+	chunkResolutionBuffers = new Map<Chunk, GPUBuffer>();
 	vertexLightCombinedBuffers = new Map<Chunk, GPUBuffer>();
 	// Configuration uniforms
 	configBuffer: GPUBuffer;
@@ -22,12 +23,15 @@ export class Light {
 	private chunkNeedsRebake = new Map<Chunk, boolean>();
 	private maxIterations = 16; // Number of iterations to propagate light
 	private getNeighborChunks?: (chunk: Chunk) => Chunk[];
-	private readonly lightSegmentSize: number;
+
+	// Calculate light segment size for a specific chunk based on its resolution
+	private getLightSegmentSize(chunk: Chunk): number {
+		const sSize = chunk.resolution / compression;
+		const cellCount = sSize * sSize * sSize;
+		return cellCount * 8;
+	}
 
 	constructor() {
-		const sSize = gridSize / compression;
-		const cellCount = sSize * sSize * sSize;
-		this.lightSegmentSize = cellCount * 8;
 
 		this.initBuffers();
 
@@ -83,9 +87,9 @@ export class Light {
 		pass.setBindGroup(0, bindGroup);
 		pass.setBindGroup(1, this.chunkContextBindGroups.get(chunk));
 
-		// Dispatch with 4x4x4 workgroup size to match mesh generation
-		const sSize = gridSize / compression;
-		const workgroupsPerDim = Math.ceil(sSize / 4);
+		// Dispatch with 4x4x4 workgroup size based on chunk's actual resolution
+		const meshletCountPerDim = chunk.resolution / compression;
+		const workgroupsPerDim = Math.ceil(meshletCountPerDim / 4);
 		pass.dispatchWorkgroups(
 			workgroupsPerDim,
 			workgroupsPerDim,
@@ -125,8 +129,8 @@ export class Light {
 		pass.setBindGroup(2, this.vertexLightContextBindGroups.get(chunk)!);
 
 		// Dispatch for all potential vertices (shader will skip empty meshlets via vertexCounts)
-		const sSize = gridSize / compression;
-		const meshletCount = sSize * sSize * sSize;
+		const meshletCountPerDim = chunk.resolution / compression;
+		const meshletCount = meshletCountPerDim * meshletCountPerDim * meshletCountPerDim;
 		const verticesPerMeshlet = 1536;
 		const totalVertices = meshletCount * verticesPerMeshlet;
 		const workgroups = Math.ceil(totalVertices / 64);
@@ -203,37 +207,52 @@ export class Light {
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 		});
 
-		// Write chunk world position (in voxels)
+		// Write chunk world position (in world space units, always 256 per chunk)
 		const chunkWorldPosData = new Int32Array([
-			chunk.position[0] * gridSize,
-			chunk.position[1] * gridSize,
-			chunk.position[2] * gridSize,
+			chunk.position[0] * 256,
+			chunk.position[1] * 256,
+			chunk.position[2] * 256,
 			0 // padding
 		]);
 		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
 
-		// Create context bind group with chunk world position
+		// Create chunk resolution buffer
+		const chunkResolutionBuffer = device.createBuffer({
+			label: `${chunkLabel} Light Resolution`,
+			size: 16, // u32 + padding = 16 bytes for alignment
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Write chunk resolution
+		const chunkResolutionData = new Uint32Array([
+			chunk.resolution,
+			0, 0, 0 // padding
+		]);
+		device.queue.writeBuffer(chunkResolutionBuffer, 0, chunkResolutionData);
+
+		// Create context bind group with chunk world position and resolution
 		const contextBindGroup = device.createBindGroup({
 			label: "Light Context",
 			layout: this.pipeline.getBindGroupLayout(1),
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
+					resource: {buffer: chunkWorldPosBuffer},
 				},
 				{
 					binding: 1,
-					resource: {buffer: chunkWorldPosBuffer},
+					resource: {buffer: chunkResolutionBuffer},
 				},
 			],
 		});
 
 		this.chunkContextBindGroups.set(chunk, contextBindGroup);
 		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+		this.chunkResolutionBuffers.set(chunk, chunkResolutionBuffer);
 
 		const combinedLightBuffer = device.createBuffer({
 			label: `${chunkLabel} Vertex Light Combined`,
-			size: this.lightSegmentSize * 7,
+			size: this.getLightSegmentSize(chunk) * 7,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 		});
 		this.vertexLightCombinedBuffers.set(chunk, combinedLightBuffer);
@@ -245,11 +264,11 @@ export class Light {
 			entries: [
 				{
 					binding: 0,
-					resource: {buffer: contextUniform.uniformBuffer},
+					resource: {buffer: chunkWorldPosBuffer},
 				},
 				{
 					binding: 1,
-					resource: {buffer: chunkWorldPosBuffer},
+					resource: {buffer: chunkResolutionBuffer},
 				},
 			],
 		});
@@ -274,6 +293,10 @@ export class Light {
 		if (worldPosBuffer) {
 			worldPosBuffer.destroy();
 		}
+		const resolutionBuffer = this.chunkResolutionBuffers.get(chunk);
+		if (resolutionBuffer) {
+			resolutionBuffer.destroy();
+		}
 		this.bindGroups.delete(chunk);
 		this.vertexLightBindGroups.delete(chunk);
 		this.chunkContextBindGroups.delete(chunk);
@@ -282,6 +305,7 @@ export class Light {
 		combinedBuffer?.destroy();
 		this.vertexLightCombinedBuffers.delete(chunk);
 		this.chunkWorldPosBuffers.delete(chunk);
+		this.chunkResolutionBuffers.delete(chunk);
 		this.chunkNeedsUpdate.delete(chunk);
 		this.chunkIterationCounts.delete(chunk);
 		this.chunkNeedsRebake.delete(chunk);
@@ -314,12 +338,12 @@ export class Light {
 
 	private initializeLighting(chunk: Chunk) {
 		// Initialize the light buffer with skylight from above
-		const sSize = gridSize / compression;
+		const sSize = chunk.resolution / compression;
 		const totalCells = sSize * sSize * sSize;
 		const initData = new Float32Array(totalCells * 2); // RG format
 
-		// Calculate world Y position of this chunk
-		const chunkWorldY = chunk.position[1] * gridSize;
+		// Calculate world Y position of this chunk (always 256 units per chunk in world space)
+		const chunkWorldY = chunk.position[1] * 256;
 
 		// Fill with initial skylight values - based on world position
 		for (let z = 0; z < sSize; z++) {
@@ -508,13 +532,16 @@ export class Light {
 			neighborPZ?.light ?? this.getDummyLightBuffer(),
 		];
 
+		const segmentSize = this.getLightSegmentSize(chunk);
 		sources.forEach((source, index) => {
+			// Use the actual buffer size (supports variable LOD chunk sizes)
+			const copySize = source.size;
 			encoder.copyBufferToBuffer(
 				source,
 				0,
 				combinedBuffer,
-				this.lightSegmentSize * index,
-				this.lightSegmentSize,
+				segmentSize * index,
+				Math.min(copySize, segmentSize),
 			);
 		});
 	}

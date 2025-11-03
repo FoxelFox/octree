@@ -1,4 +1,5 @@
-#import "../../data/context.wgsl"
+// Note: We define COMPRESSION locally since we don't use the full context import
+const COMPRESSION = 8;
 
 // WebGPU DrawIndexedIndirect command format
 struct Command {
@@ -31,13 +32,21 @@ struct Command {
 @group(1) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
 
 // Context
-@group(2) @binding(0) var<uniform> context: Context;
-@group(2) @binding(1) var<uniform> chunk_world_pos: vec4<i32>;
+@group(2) @binding(0) var<uniform> chunk_world_pos: vec4<i32>;
+@group(2) @binding(1) var<uniform> chunk_resolution: vec4<u32>; // vec4 for alignment, only .x is used
+
+// Helper to get chunk's meshlet count
+fn chunk_meshlet_count() -> u32 {
+    return chunk_resolution.x / u32(COMPRESSION);
+}
 
 // Convert world position to chunk-local compressed grid coordinates
 fn worldToCompressedGrid(world_pos: vec3<f32>) -> vec3<f32> {
     let chunk_local_pos = world_pos - vec3<f32>(chunk_world_pos.xyz);
-    return chunk_local_pos / COMPRESSION;
+    // Each meshlet covers (256 / meshlet_count) world units
+    let meshlet_count = chunk_meshlet_count();
+    let meshlet_world_size = 256.0 / f32(meshlet_count);
+    return chunk_local_pos / meshlet_world_size;
 }
 
 const SEGMENT_CURRENT: u32 = 0u;
@@ -50,11 +59,11 @@ const SEGMENT_PZ: u32 = 6u;
 const NO_LIGHT = vec2<f32>(0.0, 1.0);
 
 fn lightGridSize() -> u32 {
-    return context.grid_size / COMPRESSION;
+    return chunk_meshlet_count();
 }
 
 fn lightSegmentStride() -> u32 {
-    let size = lightGridSize();
+    let size = chunk_meshlet_count();
     return size * size * size;
 }
 

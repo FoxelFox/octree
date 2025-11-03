@@ -300,7 +300,10 @@ export class Streaming {
 
 	private initializeChunk(position: number[]): Chunk {
 		const chunkId = this.nextChunkId++;
-		return new Chunk(chunkId, position);
+		// For now, use LOD 0 for all chunks (full resolution)
+		// TODO: Calculate LOD based on distance from camera
+		const lod = 2;
+		return new Chunk(chunkId, position, lod);
 	}
 
 	private registerChunk(chunk: Chunk) {
@@ -362,7 +365,7 @@ export class Streaming {
 	private startNoiseGeneration(position: number[], chunkIndex: number) {
 		const chunk = this.initializeChunk(position);
 
-		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], 0]).then(res => {
+		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], chunk.lod]).then(res => {
 			this.activeNoiseGenerations.delete(chunkIndex);
 
 			// Add to throttled queue for GPU upload

@@ -1,4 +1,4 @@
-use crate::noise::only_noise_for_chunk;
+use crate::noise::{only_noise_for_chunk, SIZE};
 use rustc_hash::FxHashMap;
 
 const EDGE_TABLE_DATA: [u32; 256] = [
@@ -443,10 +443,11 @@ impl Chunk {
 }
 
 pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chunk {
+    // COMPRESSION must be constant 8 to maintain meshlet structure
     const COMPRESSION: u32 = 8;
     let s_size = resolution / COMPRESSION;
 
-    let density_data = only_noise_for_chunk(x, y, z, resolution);
+    let density_data = only_noise_for_chunk(x, y, z, resolution, scale);
 
     // Convert density data to VoxelData with colors and pre-compute gradients
     let voxel_size = resolution + 1;
@@ -489,11 +490,7 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
         }
     }
 
-    let chunk_world_pos = [
-        x * resolution as i32,
-        y * resolution as i32,
-        z * resolution as i32,
-    ];
+    let chunk_world_pos = [x * SIZE, y * SIZE, z * SIZE];
 
     let mut all_vertices = Vec::new();
     let mut all_normals = Vec::new();
@@ -512,9 +509,9 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
 
                 // Pre-allocate with estimated capacity
                 // Max vertices per meshlet: COMPRESSION³ cubes × ~15 triangles × 3 vertices / ~3 (sharing factor)
-                const ESTIMATED_VERTS_PER_MESHLET: usize =
+                let ESTIMATED_VERTS_PER_MESHLET: usize =
                     (COMPRESSION * COMPRESSION * COMPRESSION * 15) as usize;
-                const ESTIMATED_INDICES_PER_MESHLET: usize =
+                let ESTIMATED_INDICES_PER_MESHLET: usize =
                     (COMPRESSION * COMPRESSION * COMPRESSION * 15 * 3) as usize;
 
                 let mut local_positions = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
@@ -531,10 +528,17 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
                 for z in 0..COMPRESSION {
                     for y in 0..COMPRESSION {
                         for x in 0..COMPRESSION {
-                            let world_pos = [
+                            let voxel_pos = [
                                 (x + actual_id[0] * COMPRESSION) as i32,
                                 (y + actual_id[1] * COMPRESSION) as i32,
                                 (z + actual_id[2] * COMPRESSION) as i32,
+                            ];
+
+                            // Convert voxel grid position to chunk-local world position (0-256 range)
+                            let local_pos = [
+                                voxel_pos[0] as f32 * scale,
+                                voxel_pos[1] as f32 * scale,
+                                voxel_pos[2] as f32 * scale,
                             ];
 
                             // Get the 8 corner values, colors, and gradients of the cube (combined fetch)
@@ -545,9 +549,9 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
                             for i in 0..8 {
                                 let corner_offset = CUBE_VERTICES[i];
                                 let pos = [
-                                    world_pos[0] + corner_offset[0] as i32,
-                                    world_pos[1] + corner_offset[1] as i32,
-                                    world_pos[2] + corner_offset[2] as i32,
+                                    voxel_pos[0] + corner_offset[0] as i32,
+                                    voxel_pos[1] + corner_offset[1] as i32,
+                                    voxel_pos[2] + corner_offset[2] as i32,
                                 ];
                                 let (density, color, gradient) =
                                     get_voxel_all_safe(&voxels, pos, resolution);
@@ -600,14 +604,14 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
                                     //     (world_pos[2] as f32 + CUBE_VERTICES[v2][2]) * scale,
                                     // ];
                                     let p1 = [
-                                        world_pos[0] as f32 + CUBE_VERTICES[v1][0],
-                                        world_pos[1] as f32 + CUBE_VERTICES[v1][1],
-                                        world_pos[2] as f32 + CUBE_VERTICES[v1][2],
+                                        local_pos[0] + CUBE_VERTICES[v1][0] * scale,
+                                        local_pos[1] + CUBE_VERTICES[v1][1] * scale,
+                                        local_pos[2] + CUBE_VERTICES[v1][2] * scale,
                                     ];
                                     let p2 = [
-                                        world_pos[0] as f32 + CUBE_VERTICES[v2][0],
-                                        world_pos[1] as f32 + CUBE_VERTICES[v2][1],
-                                        world_pos[2] as f32 + CUBE_VERTICES[v2][2],
+                                        local_pos[0] + CUBE_VERTICES[v2][0] * scale,
+                                        local_pos[1] + CUBE_VERTICES[v2][1] * scale,
+                                        local_pos[2] + CUBE_VERTICES[v2][2] * scale,
                                     ];
 
                                     vertex_list[i] = interpolate_vertex(

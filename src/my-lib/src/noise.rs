@@ -138,7 +138,7 @@ pub fn noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32) -> Box<[f32]> {
     result.into_boxed_slice()
 }
 
-pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32) -> Vec<f32> {
+pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Vec<f32> {
     let voxel_size = resolution + 1; // 257 for gridSize 256
     let chunk_offset = [x * SIZE, y * SIZE, z * SIZE];
 
@@ -150,9 +150,9 @@ pub fn only_noise_for_chunk(x: i32, y: i32, z: i32, resolution: u32) -> Vec<f32>
             for vx in 0..voxel_size {
                 let pos = [vx, vy, vz];
                 let world_pos = [
-                    pos[0] as f32 + chunk_offset[0] as f32,
-                    pos[1] as f32 + chunk_offset[1] as f32,
-                    pos[2] as f32 + chunk_offset[2] as f32,
+                    pos[0] as f32 * scale + chunk_offset[0] as f32,
+                    pos[1] as f32 * scale + chunk_offset[1] as f32,
+                    pos[2] as f32 * scale + chunk_offset[2] as f32,
                 ];
                 let density = generate_sin_noise(world_pos);
 

@@ -6,6 +6,7 @@
 @group(0) @binding(3) var<storage, read> combined_density: array<u32>;
 @group(1) @binding(0) var<uniform> context: Context;
 @group(1) @binding(1) var<uniform> chunk_world_pos: vec4<i32>; // vec4 for Safari compatibility
+@group(1) @binding(2) var<uniform> chunk_resolution: vec4<u32>; // vec4 for alignment, only .x is used
 
 // Output
 @group(0) @binding(0) var<storage, read_write> counter: atomic<u32>;
@@ -26,7 +27,7 @@ struct DensitySample {
 }
 
 fn chunk_block_count() -> u32 {
-	return context.grid_size / u32(COMPRESSION);
+	return chunk_resolution.x / u32(COMPRESSION);
 }
 
 fn cells_per_chunk() -> u32 {
@@ -41,11 +42,14 @@ fn index_from_offset(offset: vec3<i32>) -> u32 {
 }
 
 fn sample_combined_density(world_pos: vec3<f32>) -> DensitySample {
-	let block_size = f32(COMPRESSION);
-	let world_block_pos = vec3<i32>(floor(world_pos / block_size));
-	let chunk_block_origin = vec3<i32>(floor(vec3<f32>(chunk_world_pos.xyz) / block_size));
+	// Calculate the world-space size of each meshlet for this chunk
+	let meshlet_count = chunk_block_count();
+	let meshlet_world_size = 256.0 / f32(meshlet_count);
+
+	let world_block_pos = vec3<i32>(floor(world_pos / meshlet_world_size));
+	let chunk_block_origin = vec3<i32>(floor(vec3<f32>(chunk_world_pos.xyz) / meshlet_world_size));
 	let relative = world_block_pos - chunk_block_origin;
-	let block_count_i = i32(chunk_block_count());
+	let block_count_i = i32(meshlet_count);
 	let offset = vec3<i32>(floor(vec3<f32>(relative) / f32(block_count_i)));
 
 	if (any(offset < vec3<i32>(-NEIGHBOR_RADIUS)) || any(offset > vec3<i32>(NEIGHBOR_RADIUS))) {
@@ -64,12 +68,18 @@ fn sample_combined_density(world_pos: vec3<f32>) -> DensitySample {
 }
 
 fn get_block_aabb(block_pos: vec3<u32>) -> AABB {
-	// Convert block position to world space by adding chunk offset
-	let local_pos = vec3<f32>(block_pos) * COMPRESSION;
+	// Calculate world-space size of each meshlet
+	// Chunk occupies 256 units, divided by number of meshlets per axis
+	let meshlet_count = chunk_block_count();
+	let meshlet_world_size = 256.0 / f32(meshlet_count);
+
+	// Convert block position to world space
+	let local_pos = vec3<f32>(block_pos) * meshlet_world_size;
 	let world_pos = local_pos + vec3<f32>(chunk_world_pos.xyz);
+
 	var aabb: AABB;
 	aabb.min = world_pos;
-	aabb.max = world_pos + vec3<f32>(COMPRESSION);
+	aabb.max = world_pos + vec3<f32>(meshlet_world_size);
 	return aabb;
 }
 
@@ -112,9 +122,11 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 		vec3<f32>(aabb.max.x, aabb.max.y, aabb.max.z)
 	);
 
-	let step_size = f32(COMPRESSION);
+	// Step size should match the world-space size of each meshlet
+	let meshlet_count = chunk_block_count();
+	let step_size = 256.0 / f32(meshlet_count);
 	let density_threshold = 1024u;
-	let max_steps = chunk_block_count();
+	let max_steps = meshlet_count;
 
 	for (var corner_idx = 0u; corner_idx < 8u; corner_idx++) {
 		let corner = corners[corner_idx];
@@ -150,10 +162,15 @@ fn test_density_occlusion(block_pos: vec3<u32>) -> bool {
 
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+	// Early exit if this thread is beyond the chunk's meshlet grid
+	let meshlet_count = chunk_block_count();
+	if (id.x >= meshlet_count || id.y >= meshlet_count || id.z >= meshlet_count) {
+		return;
+	}
 
-	let index = to1DSmall(id);
+	// Calculate 1D index using the chunk's actual meshlet count
+	let index = id.z * meshlet_count * meshlet_count + id.y * meshlet_count + id.x;
 	let view_proj = context.perspective * context.view;
-
 
 	let vertexCount = vertexCounts[index];
 

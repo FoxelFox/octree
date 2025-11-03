@@ -3,6 +3,8 @@ import {compression, device, gridSize} from "../index";
 export class Chunk {
 	id: number
 	position: number[]
+	lod: number           // Level of detail (0 = full resolution, higher = lower resolution)
+	resolution: number    // Voxel resolution for this chunk (256, 128, 64, 32...)
 	voxelData: GPUBuffer;    // density (f32) + color (u32) = 8 bytes per voxel
 	vertexCounts: GPUBuffer; // just for the cull pipeline to fast ignore empty meshlets
 	commands: GPUBuffer;     // indirect draw commands
@@ -20,15 +22,17 @@ export class Chunk {
 	chunkLabel: string;
 
 
-	constructor(id: number, position: number[]) {
+	constructor(id: number, position: number[], lod: number = 0) {
 		this.id = id;
 		this.position = position;
+		this.lod = lod;
+		this.resolution = Math.floor(256 / Math.pow(2, lod));
 
-		// Allocate 257³ voxels (gridSize + 1) to handle chunk borders
+		// Allocate (resolution + 1)³ voxels to handle chunk borders
 		// Each voxel: density (f32) + color (u32) = 8 bytes
-		const voxelGridSize = gridSize + 1;
+		const voxelGridSize = this.resolution + 1;
 		const size = Math.pow(voxelGridSize, 3) * 8;
-		const sSize = gridSize / compression;
+		const sSize = this.resolution / compression;
 		const sSize3 = sSize * sSize * sSize;
 
 		this.chunkLabel = `Chunk[${id}](${position[0]},${position[1]},${position[2]})`;
