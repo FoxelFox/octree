@@ -24,6 +24,7 @@ export class Streaming {
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	activeNoiseGenerations = new Set<number>(); // Chunks currently generating noise (not throttled)
+	chunksBeingReplaced = new Map<number, Chunk>(); // Old chunks to render while new LOD generates
 
 	renderDistance = 4;
 	pendingCleanup: Chunk[] = [];
@@ -202,6 +203,9 @@ export class Streaming {
 		// Process one chunk from generation queue per frame (non-blocking)
 		this.processGenerationQueue();
 
+		// Check and update LOD for existing chunks
+		this.checkAndUpdateChunkLOD();
+
 		// Update active chunks based on new position
 		this.updateActiveChunks(center);
 
@@ -272,7 +276,9 @@ export class Streaming {
 		// Find chunks that are neither active nor neighbors of active chunks
 		const chunksToRemove: Chunk[] = [];
 		for (const chunk of this.grid.values()) {
-			if (!neededChunks.has(chunk)) {
+			const chunkIndex = this.map3D1D(chunk.position);
+			// Don't remove chunks that are being replaced for LOD updates
+			if (!neededChunks.has(chunk) && !this.chunksBeingReplaced.has(chunkIndex)) {
 				chunksToRemove.push(chunk);
 			}
 		}
@@ -298,12 +304,91 @@ export class Streaming {
 		}
 	}
 
+	private calculateLODForDistance(distance: number): number {
+		// LOD levels: 0 = full resolution, 1 = half, 2 = quarter
+		// Distance thresholds in chunk units
+		const LOD_THRESHOLDS = [0.5, 1.5];
+
+		for (let lod = 0; lod < LOD_THRESHOLDS.length; lod++) {
+			if (distance <= LOD_THRESHOLDS[lod]) {
+				return lod;
+			}
+		}
+		return LOD_THRESHOLDS.length;
+	}
+
+	private shouldUpdateLOD(currentLOD: number, distance: number): boolean {
+		const HYSTERESIS = 0.2;
+		const LOD_THRESHOLDS = [0.5, 1.5];
+
+		// Calculate target LOD with hysteresis to prevent rapid switching
+		// Hysteresis makes it harder to change LOD - we need to be clearly past the threshold
+		let targetLOD = 0;
+		for (let lod = 0; lod < LOD_THRESHOLDS.length; lod++) {
+			const threshold = LOD_THRESHOLDS[lod];
+
+			// Apply hysteresis based on where we currently are
+			// If we're at a higher LOD (lod+1 or more), need to get clearly below threshold to upgrade
+			// If we're at a lower LOD (lod or less), need to get clearly above threshold to downgrade
+			let adjustedThreshold: number;
+			if (currentLOD > lod) {
+				// Currently at higher LOD than lod, need distance < threshold - hysteresis to upgrade
+				adjustedThreshold = threshold - HYSTERESIS;
+			} else {
+				// Currently at lower LOD than lod+1, need distance > threshold + hysteresis to downgrade
+				adjustedThreshold = threshold + HYSTERESIS;
+			}
+
+			if (distance > adjustedThreshold) {
+				targetLOD = lod + 1;
+			} else {
+				break;
+			}
+		}
+
+		return targetLOD !== currentLOD;
+	}
+
+	private calculateChunkDistance(position: number[]): number {
+		const chunkCenterX = (position[0] + 0.5) * gridSize;
+		const chunkCenterY = (position[1] + 0.5) * gridSize;
+		const chunkCenterZ = (position[2] + 0.5) * gridSize;
+
+		const dx = camera.position[0] - chunkCenterX;
+		const dy = camera.position[1] - chunkCenterY;
+		const dz = camera.position[2] - chunkCenterZ;
+		return Math.sqrt(dx * dx + dy * dy + dz * dz) / gridSize;
+	}
+
 	private initializeChunk(position: number[]): Chunk {
 		const chunkId = this.nextChunkId++;
-		// For now, use LOD 0 for all chunks (full resolution)
-		// TODO: Calculate LOD based on distance from camera
-		const lod = 2;
+		const distance = this.calculateChunkDistance(position);
+		const lod = this.calculateLODForDistance(distance);
 		return new Chunk(chunkId, position, lod);
+	}
+
+	private checkAndUpdateChunkLOD() {
+		// Check all loaded chunks to see if their LOD should change
+		for (const [index, chunk] of this.grid.entries()) {
+			// Skip if already being replaced
+			if (this.chunksBeingReplaced.has(index)) {
+				continue;
+			}
+
+			const distance = this.calculateChunkDistance(chunk.position);
+
+			// Use hysteresis-based check to prevent constant switching
+			if (this.shouldUpdateLOD(chunk.lod, distance)) {
+				// Keep old chunk in the grid and render it until replacement is ready
+				this.chunksBeingReplaced.set(index, chunk);
+
+				// Queue for regeneration with new LOD
+				if (!this.inProgressGenerations.has(index) && !this.queuedChunks.has(index)) {
+					this.generationQueue.push(chunk.position);
+					this.queuedChunks.add(index);
+				}
+			}
+		}
 	}
 
 	private registerChunk(chunk: Chunk) {
@@ -352,7 +437,14 @@ export class Streaming {
 			const chunkIndex = this.map3D1D(position);
 			this.queuedChunks.delete(chunkIndex);
 
-			if (this.grid.has(chunkIndex) || this.inProgressGenerations.has(chunkIndex) || this.activeNoiseGenerations.has(chunkIndex)) {
+			// Skip if chunk exists and is NOT being replaced for LOD update
+			const isBeingReplaced = this.chunksBeingReplaced.has(chunkIndex);
+			if (!isBeingReplaced && this.grid.has(chunkIndex)) {
+				continue;
+			}
+
+			// Skip if already generating
+			if (this.inProgressGenerations.has(chunkIndex) || this.activeNoiseGenerations.has(chunkIndex)) {
 				continue;
 			}
 
@@ -423,6 +515,15 @@ export class Streaming {
 			}
 			case 'finalize': {
 				const chunk = task.chunk;
+
+				// Check if we're replacing an existing chunk (LOD transition)
+				const oldChunk = this.chunksBeingReplaced.get(task.index);
+				if (oldChunk) {
+					// Clean up old chunk now that replacement is ready
+					this.chunksBeingReplaced.delete(task.index);
+					this.pendingCleanup.push(oldChunk);
+				}
+
 				this.grid.set(task.index, chunk);
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);

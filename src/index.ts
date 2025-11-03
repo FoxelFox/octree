@@ -4,6 +4,7 @@ import {TimingDisplay} from "./ui/timing-display";
 import {FrameGraphManager} from "./ui/frame-graph-manager";
 import {QueueDisplay} from "./ui/queue-display";
 import {UIManager} from "./ui/ui-manager";
+import {ChunkMinimap} from "./ui/chunk-minimap";
 import {Streaming} from "./chunk/streaming";
 import {Scheduler} from "./generation/scheduler";
 
@@ -35,10 +36,12 @@ async function initializeApp() {
 	const timingDisplay = new TimingDisplay();
 	const frameGraphManager = new FrameGraphManager();
 	const queueDisplay = new QueueDisplay();
+	const chunkMinimap = new ChunkMinimap(streaming);
 
 	uiManager.addPanel(timingDisplay, 'top-left');
 	uiManager.addPanel(queueDisplay, 'top-left');
 	uiManager.addPanel(frameGraphManager, 'top-right');
+	uiManager.addPanel(chunkMinimap, 'bottom-right');
 
 	function runOneTimeSetup() {
 		gpu.update();
@@ -103,6 +106,8 @@ async function initializeApp() {
 				streaming.activeChunks.size,
 				streaming.grid.size,
 			);
+
+			chunkMinimap.update();
 
 			if (!gpu.hasError) {
 				requestAnimationFrame(loop);
