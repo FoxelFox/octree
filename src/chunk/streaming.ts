@@ -518,13 +518,20 @@ export class Streaming {
 
 				// Check if we're replacing an existing chunk (LOD transition)
 				const oldChunk = this.chunksBeingReplaced.get(task.index);
+
+				// Add new chunk to grid (replaces old chunk at this index)
+				this.grid.set(task.index, chunk);
+
 				if (oldChunk) {
+					// Keep old chunk in activeChunks so it continues rendering until cleanup
+					// This prevents holes in terrain during LOD transitions
+					this.activeChunks.add(oldChunk);
+
 					// Clean up old chunk now that replacement is ready
 					this.chunksBeingReplaced.delete(task.index);
 					this.pendingCleanup.push(oldChunk);
 				}
 
-				this.grid.set(task.index, chunk);
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
 				for (const neighbor of neighbors) {
@@ -544,6 +551,9 @@ export class Streaming {
 			const neighbors = this.getNeighborChunks(chunk);
 			const chunkIndex = this.map3D1D(chunk.position);
 			this.grid.delete(chunkIndex);
+
+			// Remove from activeChunks in case it was kept for rendering during LOD transition
+			this.activeChunks.delete(chunk);
 
 			// Unregister from all pipelines (cull is async)
 			await this.cull.unregisterChunk(chunk);
