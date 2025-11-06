@@ -9,8 +9,10 @@ import {VoxelEditor} from '../pipeline/generation/voxel_editor';
 type GenerationStage = 'gpu_upload' | 'light' | 'finalize';
 
 interface GenerationTask {
-	index: number;
+	index: number; // Position index
+	chunkKey: number; // Position + LOD key
 	position: number[];
+	lod: number;
 	stage: GenerationStage;
 	chunk: Chunk;
 	progress: number;
@@ -18,13 +20,20 @@ interface GenerationTask {
 }
 
 export class Streaming {
-	grid = new Map<number, Chunk>();
+	// Store multiple LODs per position: position_index -> LOD_level -> Chunk
+	grid = new Map<number, Map<number, Chunk>>();
+	// Track which LOD is currently being rendered for each position
+	activeLOD = new Map<number, number>();
+	// Track which LODs are currently generating for each position
+	generatingLODs = new Map<number, Set<number>>();
+	// Track chunks that need culling updates (non-active LODs waiting to be ready)
+	pendingCullingChunks = new Set<Chunk>();
+
 	generationQueue: number[][] = []; // Queue of chunk positions to generate
 	pendingGenerations: GenerationTask[] = []; // Throttled queue for GPU upload, light, finalize
 	queuedChunks = new Set<number>();
 	inProgressGenerations = new Set<number>();
 	activeNoiseGenerations = new Set<number>(); // Chunks currently generating noise (not throttled)
-	chunksBeingReplaced = new Map<number, Chunk>(); // Old chunks to render while new LOD generates
 
 	renderDistance = 4;
 	pendingCleanup: Chunk[] = [];
@@ -66,8 +75,32 @@ export class Streaming {
 		return p[0] + 16384 * (p[1] + 16384 * p[2]);
 	}
 
+	// Helper to create a unique key for position + LOD
+	getChunkKey(position: number[], lod: number): number {
+		// Use high bits for LOD (max LOD is 2, so we need 2 bits)
+		return this.map3D1D(position) | (lod << 30);
+	}
+
+	// Get the active (currently rendered) chunk at a position
 	getChunkAt(position: number[]): Chunk | undefined {
-		return this.grid.get(this.map3D1D(position));
+		const index = this.map3D1D(position);
+		const activeLod = this.activeLOD.get(index);
+		if (activeLod === undefined) return undefined;
+
+		const lodMap = this.grid.get(index);
+		return lodMap?.get(activeLod);
+	}
+
+	// Get a specific LOD chunk at a position
+	getChunkAtLOD(position: number[], lod: number): Chunk | undefined {
+		const index = this.map3D1D(position);
+		const lodMap = this.grid.get(index);
+		return lodMap?.get(lod);
+	}
+
+	// Check if a chunk is ready to render (has culling data)
+	isChunkReadyToRender(chunk: Chunk): boolean {
+		return chunk.indicesArray !== undefined && chunk.indicesArray.length > 0;
 	}
 
 	getNeighborChunks(chunk: Chunk): Chunk[] {
@@ -143,14 +176,20 @@ export class Streaming {
 				if (distance <= this.renderDistance) {
 					const chunkIndex = this.map3D1D(chunkPos);
 
-					// Only queue if chunk isn't present or already scheduled
+					// Check if this position has any LOD chunks
+					const hasAnyLOD = this.grid.has(chunkIndex) && this.grid.get(chunkIndex)!.size > 0;
+
+					// For new positions, we'll start with LOD 2, so check if LOD 2 is queued/generating
+					const lod2Key = this.getChunkKey(chunkPos, 2);
+
+					// Only queue if position has no chunks and LOD 2 isn't already scheduled
 					if (
-						!this.grid.has(chunkIndex) &&
-						!this.inProgressGenerations.has(chunkIndex) &&
-						!this.queuedChunks.has(chunkIndex)
+						!hasAnyLOD &&
+						!this.inProgressGenerations.has(lod2Key) &&
+						!this.queuedChunks.has(lod2Key)
 					) {
 						this.generationQueue.push(chunkPos);
-						this.queuedChunks.add(chunkIndex);
+						this.queuedChunks.add(lod2Key);
 					}
 				}
 			}
@@ -214,16 +253,18 @@ export class Streaming {
 		// Queue new chunks that need to be generated
 		this.queueChunksAroundPosition(center);
 
-		// Update all active chunks
-		const chunksArray = Array.from(this.activeChunks);
+		// Combine active chunks with pending culling chunks for updates
+		const allChunksForUpdate = new Set([...this.activeChunks, ...this.pendingCullingChunks]);
+		const chunksArray = Array.from(allChunksForUpdate);
 
 		for (const chunk of chunksArray) {
 			this.light.update(updateEncoder, chunk, (c) => this.getNeighborChunks(c));
 			this.cull.update(updateEncoder, chunk, (c) => this.getNeighborChunks(c));
 		}
 
-		// Render all chunks at once
-		this.block.update(updateEncoder, chunksArray);
+		// Only render active chunks (not pending culling chunks)
+		const renderChunks = Array.from(this.activeChunks);
+		this.block.update(updateEncoder, renderChunks);
 	}
 
 	updateActiveChunks(center: number[]) {
@@ -234,6 +275,9 @@ export class Streaming {
 		// Camera position in world space
 		const camX = camera.position[0];
 		const camZ = camera.position[2];
+
+		// Track which positions are within render distance
+		const activePositions = new Set<number>();
 
 		// Add chunks within renderDistance (horizontal only)
 		for (let dx = -searchRadius; dx <= searchRadius; dx++) {
@@ -255,8 +299,10 @@ export class Streaming {
 				// Only activate chunks within circular distance
 				if (distance <= this.renderDistance) {
 					const chunkIndex = this.map3D1D(chunkPos);
-					const chunk = this.grid.get(chunkIndex);
+					activePositions.add(chunkIndex);
 
+					// Get the active chunk for this position
+					const chunk = this.getChunkAt(chunkPos);
 					if (chunk) {
 						this.activeChunks.add(chunk);
 					}
@@ -266,26 +312,32 @@ export class Streaming {
 
 		// Build set of chunks that are needed (active + neighbors of active)
 		const neededChunks = new Set<Chunk>(this.activeChunks);
+		const neededPositions = new Set<number>(activePositions);
+
 		for (const chunk of this.activeChunks) {
 			const neighbors = this.getNeighborChunks(chunk);
 			for (const neighbor of neighbors) {
 				neededChunks.add(neighbor);
+				neededPositions.add(this.map3D1D(neighbor.position));
 			}
 		}
 
-		// Find chunks that are neither active nor neighbors of active chunks
-		const chunksToRemove: Chunk[] = [];
-		for (const chunk of this.grid.values()) {
-			const chunkIndex = this.map3D1D(chunk.position);
-			// Don't remove chunks that are being replaced for LOD updates
-			if (!neededChunks.has(chunk) && !this.chunksBeingReplaced.has(chunkIndex)) {
-				chunksToRemove.push(chunk);
+		// Find positions that are no longer needed and cleanup all their LOD chunks
+		const positionsToRemove: number[] = [];
+		for (const [posIndex, lodMap] of this.grid.entries()) {
+			if (!neededPositions.has(posIndex)) {
+				positionsToRemove.push(posIndex);
 			}
 		}
 
-		// Queue chunks for cleanup (will happen after GPU submit)
-		if (chunksToRemove.length > 0) {
-			this.pendingCleanup.push(...chunksToRemove);
+		// Queue all LODs at unneeded positions for cleanup
+		for (const posIndex of positionsToRemove) {
+			const lodMap = this.grid.get(posIndex);
+			if (lodMap) {
+				for (const chunk of lodMap.values()) {
+					this.pendingCleanup.push(chunk);
+				}
+			}
 		}
 	}
 
@@ -360,35 +412,62 @@ export class Streaming {
 		return Math.sqrt(dx * dx + dy * dy + dz * dz) / gridSize;
 	}
 
-	private initializeChunk(position: number[]): Chunk {
+	private initializeChunk(position: number[], forceLOD?: number): Chunk {
 		const chunkId = this.nextChunkId++;
 		const distance = this.calculateChunkDistance(position);
-		const lod = this.calculateLODForDistance(distance);
+
+		// Use forced LOD if provided, otherwise calculate from distance
+		const lod = forceLOD !== undefined ? forceLOD : this.calculateLODForDistance(distance);
+
 		return new Chunk(chunkId, position, lod);
 	}
 
 	private checkAndUpdateChunkLOD() {
-		// Check all loaded chunks to see if their LOD should change
-		for (const [index, chunk] of this.grid.entries()) {
-			// Skip if already being replaced
-			if (this.chunksBeingReplaced.has(index)) {
-				continue;
-			}
+		// Check all loaded positions to upgrade to better LODs when ready
+		for (const [posIndex, lodMap] of this.grid.entries()) {
+			// Get position from any chunk in the LOD map
+			const anyChunk = lodMap.values().next().value as Chunk;
+			if (!anyChunk) continue;
 
-			const distance = this.calculateChunkDistance(chunk.position);
+			const position = anyChunk.position;
 
-			// Use hysteresis-based check to prevent constant switching
-			if (this.shouldUpdateLOD(chunk.lod, distance)) {
-				// Keep old chunk in the grid and render it until replacement is ready
-				this.chunksBeingReplaced.set(index, chunk);
+			// Get current active LOD
+			const activeLod = this.activeLOD.get(posIndex);
 
-				// Queue for regeneration with new LOD
-				if (!this.inProgressGenerations.has(index) && !this.queuedChunks.has(index)) {
-					this.generationQueue.push(chunk.position);
-					this.queuedChunks.add(index);
+			// SIMPLE RULE: Always use the best (lowest) available LOD that's ready
+			// NEVER downgrade - once we have better quality, keep it
+			if (activeLod !== undefined) {
+				// Check if there's a better LOD available (0 is best, 2 is worst)
+				for (let lod = 0; lod < activeLod; lod++) {
+					const lodChunk = lodMap.get(lod);
+					if (lodChunk && this.isChunkReadyToRender(lodChunk)) {
+						// Found a better LOD that's ready - switch to it
+						console.log(`[LOD] Upgrading [${position[0]},${position[1]},${position[2]}] from LOD ${activeLod} to LOD ${lod}`);
+						this.activeLOD.set(posIndex, lod);
+						this.pendingCullingChunks.delete(lodChunk);
+						break; // Only upgrade one step at a time to avoid jumps
+					}
 				}
+				// Never downgrade - we keep the best LOD we have
 			}
 		}
+	}
+
+	// Helper to queue generation of a specific LOD for a position
+	private queueChunkGeneration(position: number[], lod: number) {
+		const posIndex = this.map3D1D(position);
+		const chunkKey = this.getChunkKey(position, lod);
+
+		// Track that this LOD is being generated
+		if (!this.generatingLODs.has(posIndex)) {
+			this.generatingLODs.set(posIndex, new Set());
+		}
+		this.generatingLODs.get(posIndex)!.add(lod);
+
+		// Queue for generation - store position AND LOD
+		// We encode the LOD in the position array as a 4th element
+		this.generationQueue.push([position[0], position[1], position[2], lod]);
+		this.queuedChunks.add(chunkKey);
 	}
 
 	private registerChunk(chunk: Chunk) {
@@ -433,39 +512,79 @@ export class Streaming {
 
 		// Start noise generation for chunks (not throttled - webworkers handle their own scheduling)
 		while (this.generationQueue.length > 0) {
-			const position = this.generationQueue.shift()!;
-			const chunkIndex = this.map3D1D(position);
-			this.queuedChunks.delete(chunkIndex);
+			const queueEntry = this.generationQueue.shift()!;
 
-			// Skip if chunk exists and is NOT being replaced for LOD update
-			const isBeingReplaced = this.chunksBeingReplaced.has(chunkIndex);
-			if (!isBeingReplaced && this.grid.has(chunkIndex)) {
+			// Extract position and LOD (4th element is optional LOD)
+			const position = [queueEntry[0], queueEntry[1], queueEntry[2]];
+			const posIndex = this.map3D1D(position);
+			const lodMap = this.grid.get(posIndex);
+			const hasAnyLOD = lodMap && lodMap.size > 0;
+
+			// Determine which LOD to generate
+			let lodToGenerate: number;
+
+			if (queueEntry.length === 4) {
+				// Explicit LOD was specified in the queue
+				lodToGenerate = queueEntry[3];
+				console.log(`[LOD] Processing queue entry for [${position[0]},${position[1]},${position[2]}] with explicit LOD ${lodToGenerate}`);
+			} else if (!hasAnyLOD) {
+				// New position: always start with LOD 2 (lowest detail, fastest)
+				lodToGenerate = 2;
+			} else {
+				// Position has chunks: determine which LOD was requested
+				const targetLod = this.targetLOD.get(posIndex);
+				const activeLod = this.activeLOD.get(posIndex);
+
+				if (targetLod !== undefined && activeLod !== undefined) {
+					// Generate the next LOD towards target
+					if (targetLod < activeLod) {
+						lodToGenerate = activeLod - 1; // Better LOD
+					} else {
+						lodToGenerate = targetLod; // Worse LOD
+					}
+				} else {
+					// Fallback: calculate from distance
+					const distance = this.calculateChunkDistance(position);
+					lodToGenerate = this.calculateLODForDistance(distance);
+				}
+			}
+
+			// Check if this specific LOD already exists or is generating
+			const chunkKey = this.getChunkKey(position, lodToGenerate);
+			this.queuedChunks.delete(chunkKey);
+
+			if (lodMap?.has(lodToGenerate)) {
+				// This LOD already exists, skip
+				const generatingSet = this.generatingLODs.get(posIndex);
+				generatingSet?.delete(lodToGenerate);
 				continue;
 			}
 
-			// Skip if already generating
-			if (this.inProgressGenerations.has(chunkIndex) || this.activeNoiseGenerations.has(chunkIndex)) {
+			// Skip if already generating this specific LOD
+			if (this.inProgressGenerations.has(chunkKey) || this.activeNoiseGenerations.has(chunkKey)) {
 				continue;
 			}
 
 			// Start noise generation immediately (not throttled)
-			this.activeNoiseGenerations.add(chunkIndex);
-			this.startNoiseGeneration(position, chunkIndex);
+			this.activeNoiseGenerations.add(chunkKey);
+			this.startNoiseGeneration(position, posIndex, lodToGenerate, chunkKey);
 		}
 	}
 
-	private startNoiseGeneration(position: number[], chunkIndex: number) {
-		const chunk = this.initializeChunk(position);
+	private startNoiseGeneration(position: number[], posIndex: number, lod: number, chunkKey: number) {
+		const chunk = this.initializeChunk(position, lod);
 
-		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], chunk.lod]).then(res => {
-			this.activeNoiseGenerations.delete(chunkIndex);
+		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], lod]).then(res => {
+			this.activeNoiseGenerations.delete(chunkKey);
 
 			// Add to throttled queue for GPU upload
-			if (!this.inProgressGenerations.has(chunkIndex)) {
-				this.inProgressGenerations.add(chunkIndex);
+			if (!this.inProgressGenerations.has(chunkKey)) {
+				this.inProgressGenerations.add(chunkKey);
 				this.pendingGenerations.push({
-					index: chunkIndex,
+					index: posIndex,
+					chunkKey: chunkKey,
 					position: [...position],
+					lod: lod,
 					stage: 'gpu_upload',
 					chunk: chunk,
 					progress: 0,
@@ -474,7 +593,7 @@ export class Streaming {
 			}
 		}).catch((error) => {
 			console.error('Error in noise generation:', error);
-			this.activeNoiseGenerations.delete(chunkIndex);
+			this.activeNoiseGenerations.delete(chunkKey);
 		});
 	}
 
@@ -515,29 +634,64 @@ export class Streaming {
 			}
 			case 'finalize': {
 				const chunk = task.chunk;
+				const posIndex = task.index;
+				const lod = task.lod;
 
-				// Check if we're replacing an existing chunk (LOD transition)
-				const oldChunk = this.chunksBeingReplaced.get(task.index);
+				// Add chunk to LOD map
+				if (!this.grid.has(posIndex)) {
+					this.grid.set(posIndex, new Map());
+				}
+				const lodMap = this.grid.get(posIndex)!;
+				lodMap.set(lod, chunk);
 
-				// Add new chunk to grid (replaces old chunk at this index)
-				this.grid.set(task.index, chunk);
+				// Remove from generating set
+				const generatingSet = this.generatingLODs.get(posIndex);
+				generatingSet?.delete(lod);
 
-				if (oldChunk) {
-					// Keep old chunk in activeChunks so it continues rendering until cleanup
-					// This prevents holes in terrain during LOD transitions
-					this.activeChunks.add(oldChunk);
+				// Determine if we should switch to this LOD
+				const currentActiveLod = this.activeLOD.get(posIndex);
 
-					// Clean up old chunk now that replacement is ready
-					this.chunksBeingReplaced.delete(task.index);
-					this.pendingCleanup.push(oldChunk);
+				if (currentActiveLod === undefined) {
+					// First chunk for this position: activate immediately
+					// (It's LOD 2, so it should render quickly even without culling data ready)
+					this.activeLOD.set(posIndex, lod);
+				} else {
+					// Position already has an active LOD
+					// Add the new chunk to pendingCullingChunks so culling runs on it
+					// This allows us to check if it's ready in checkAndUpdateChunkLOD
+					this.pendingCullingChunks.add(chunk);
+					console.log(`[LOD] Added LOD ${lod} chunk at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}] to pendingCulling (active LOD is ${currentActiveLod})`);
 				}
 
+				// Invalidate culling for the new chunk and its neighbors
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
 				for (const neighbor of neighbors) {
 					this.light.invalidate(neighbor);
 				}
-				this.inProgressGenerations.delete(task.index);
+
+				// Clean up tracking
+				this.inProgressGenerations.delete(task.chunkKey);
+
+				// Progressive LOD generation: ALWAYS queue next better LOD immediately
+				if (lod === 2) {
+					// Just finished LOD 2, always queue LOD 1
+					const nextLOD = 1;
+					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
+					console.log(`[LOD] Finished LOD 2 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], queueing LOD 1...`);
+					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
+						this.queueChunkGeneration(chunk.position, nextLOD);
+					}
+				} else if (lod === 1) {
+					// Just finished LOD 1, always queue LOD 0
+					const nextLOD = 0;
+					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
+					console.log(`[LOD] Finished LOD 1 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], queueing LOD 0...`);
+					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
+						this.queueChunkGeneration(chunk.position, nextLOD);
+					}
+				}
+
 				return true;
 			}
 			default:
@@ -546,14 +700,34 @@ export class Streaming {
 	}
 
 	private async cleanupChunks(chunks: Chunk[]) {
-
 		for (const chunk of chunks) {
 			const neighbors = this.getNeighborChunks(chunk);
-			const chunkIndex = this.map3D1D(chunk.position);
-			this.grid.delete(chunkIndex);
+			const posIndex = this.map3D1D(chunk.position);
+			const lod = chunk.lod;
 
-			// Remove from activeChunks in case it was kept for rendering during LOD transition
+			// Remove chunk from its LOD map
+			const lodMap = this.grid.get(posIndex);
+			if (lodMap) {
+				lodMap.delete(lod);
+
+				// If this was the last LOD for this position, cleanup tracking data
+				if (lodMap.size === 0) {
+					this.grid.delete(posIndex);
+					this.activeLOD.delete(posIndex);
+					this.generatingLODs.delete(posIndex);
+				} else if (this.activeLOD.get(posIndex) === lod) {
+					// If we're removing the active LOD, switch to another available LOD
+					// Prefer lower (better) LODs
+					const availableLODs = Array.from(lodMap.keys()).sort((a, b) => a - b);
+					if (availableLODs.length > 0) {
+						this.activeLOD.set(posIndex, availableLODs[0]);
+					}
+				}
+			}
+
+			// Remove from activeChunks and pendingCullingChunks
 			this.activeChunks.delete(chunk);
+			this.pendingCullingChunks.delete(chunk);
 
 			// Unregister from all pipelines (cull is async)
 			await this.cull.unregisterChunk(chunk);
