@@ -431,13 +431,35 @@ export class Streaming {
 
 			const position = anyChunk.position;
 
+			// Calculate current distance from camera
+			const distance = this.calculateChunkDistance(position);
+
 			// Get current active LOD
 			const activeLod = this.activeLOD.get(posIndex);
 
-			// SIMPLE RULE: Always use the best (lowest) available LOD that's ready
-			// NEVER downgrade - once we have better quality, keep it
 			if (activeLod !== undefined) {
+				// 1. Check if we should GENERATE better LODs based on distance
+				if (activeLod === 2 && distance <= 1.5) {
+					// We're at LOD 2 but close enough for LOD 1
+					const nextLOD = 1;
+					const nextChunkKey = this.getChunkKey(position, nextLOD);
+					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
+						console.log(`[LOD] Camera moved closer to [${position[0]},${position[1]},${position[2]}], distance=${distance.toFixed(2)}, queueing LOD 1...`);
+						this.queueChunkGeneration(position, nextLOD);
+					}
+				} else if (activeLod === 1 && distance <= 0.5) {
+					// We're at LOD 1 but close enough for LOD 0
+					const nextLOD = 0;
+					const nextChunkKey = this.getChunkKey(position, nextLOD);
+					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
+						console.log(`[LOD] Camera moved closer to [${position[0]},${position[1]},${position[2]}], distance=${distance.toFixed(2)}, queueing LOD 0...`);
+						this.queueChunkGeneration(position, nextLOD);
+					}
+				}
+
+				// 2. Check if we should SWITCH to better LODs that are already ready
 				// Check if there's a better LOD available (0 is best, 2 is worst)
+				let switched = false;
 				for (let lod = 0; lod < activeLod; lod++) {
 					const lodChunk = lodMap.get(lod);
 					if (lodChunk && this.isChunkReadyToRender(lodChunk)) {
@@ -445,10 +467,25 @@ export class Streaming {
 						console.log(`[LOD] Upgrading [${position[0]},${position[1]},${position[2]}] from LOD ${activeLod} to LOD ${lod}`);
 						this.activeLOD.set(posIndex, lod);
 						this.pendingCullingChunks.delete(lodChunk);
+						switched = true;
 						break; // Only upgrade one step at a time to avoid jumps
 					}
 				}
-				// Never downgrade - we keep the best LOD we have
+
+				// 3. Check if we should DOWNGRADE to worse LODs when camera moves away
+				if (!switched && this.shouldUpdateLOD(activeLod, distance)) {
+					const targetLOD = this.calculateLODForDistance(distance);
+
+					// Only downgrade if target is worse (higher number) than current
+					if (targetLOD > activeLod) {
+						const targetChunk = lodMap.get(targetLOD);
+						if (targetChunk && this.isChunkReadyToRender(targetChunk)) {
+							console.log(`[LOD] Downgrading [${position[0]},${position[1]},${position[2]}] from LOD ${activeLod} to LOD ${targetLOD} (distance=${distance.toFixed(2)})`);
+							this.activeLOD.set(posIndex, targetLOD);
+							this.pendingCullingChunks.delete(targetChunk);
+						}
+					}
+				}
 			}
 		}
 	}
@@ -673,20 +710,22 @@ export class Streaming {
 				// Clean up tracking
 				this.inProgressGenerations.delete(task.chunkKey);
 
-				// Progressive LOD generation: ALWAYS queue next better LOD immediately
-				if (lod === 2) {
-					// Just finished LOD 2, always queue LOD 1
+				// Progressive LOD generation: Queue next LOD based on CURRENT distance from camera
+				const currentDistance = this.calculateChunkDistance(chunk.position);
+
+				if (lod === 2 && currentDistance <= 1.5) {
+					// Just finished LOD 2, check if we're close enough for LOD 1
 					const nextLOD = 1;
 					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					console.log(`[LOD] Finished LOD 2 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], queueing LOD 1...`);
+					console.log(`[LOD] Finished LOD 2 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], distance=${currentDistance.toFixed(2)}, queueing LOD 1...`);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
 						this.queueChunkGeneration(chunk.position, nextLOD);
 					}
-				} else if (lod === 1) {
-					// Just finished LOD 1, always queue LOD 0
+				} else if (lod === 1 && currentDistance <= 0.5) {
+					// Just finished LOD 1, check if we're very close for LOD 0
 					const nextLOD = 0;
 					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					console.log(`[LOD] Finished LOD 1 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], queueing LOD 0...`);
+					console.log(`[LOD] Finished LOD 1 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], distance=${currentDistance.toFixed(2)}, queueing LOD 0...`);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
 						this.queueChunkGeneration(chunk.position, nextLOD);
 					}
