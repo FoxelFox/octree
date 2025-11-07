@@ -14,6 +14,7 @@ export class Light {
 	vertexLightContextBindGroups = new Map<Chunk, GPUBindGroup>();
 	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
 	chunkResolutionBuffers = new Map<Chunk, GPUBuffer>();
+	neighborLODBuffers = new Map<Chunk, GPUBuffer>();
 	vertexLightCombinedBuffers = new Map<Chunk, GPUBuffer>();
 	// Configuration uniforms
 	configBuffer: GPUBuffer;
@@ -69,8 +70,9 @@ export class Light {
 			this.getNeighborChunks = getNeighborChunks;
 		}
 
-		// Recreate bind group with current neighbor data
+		// Recreate bind group with current neighbor data and update neighbor LOD buffer
 		if (getNeighborChunks) {
+			this.updateNeighborLODs(chunk, getNeighborChunks);
 			this.bindGroups.set(chunk, this.createComputeBindGroup(chunk, getNeighborChunks));
 			this.vertexLightBindGroups.set(chunk, this.createVertexLightBindGroup(chunk));
 		}
@@ -230,7 +232,18 @@ export class Light {
 		]);
 		device.queue.writeBuffer(chunkResolutionBuffer, 0, chunkResolutionData);
 
-		// Create context bind group with chunk world position and resolution
+		// Create neighbor LOD buffer (6 neighbors + 2 padding = 8 u32s = 32 bytes)
+		const neighborLODBuffer = device.createBuffer({
+			label: `${chunkLabel} Neighbor LODs`,
+			size: 32, // 6 u32s + 2 padding = 32 bytes
+			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+		});
+
+		// Initialize with zeros (no neighbors)
+		const neighborLODData = new Uint32Array(8);
+		device.queue.writeBuffer(neighborLODBuffer, 0, neighborLODData);
+
+		// Create context bind group with chunk world position, resolution, and neighbor LODs
 		const contextBindGroup = device.createBindGroup({
 			label: "Light Context",
 			layout: this.pipeline.getBindGroupLayout(1),
@@ -243,12 +256,17 @@ export class Light {
 					binding: 1,
 					resource: {buffer: chunkResolutionBuffer},
 				},
+				{
+					binding: 2,
+					resource: {buffer: neighborLODBuffer},
+				},
 			],
 		});
 
 		this.chunkContextBindGroups.set(chunk, contextBindGroup);
 		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
 		this.chunkResolutionBuffers.set(chunk, chunkResolutionBuffer);
+		this.neighborLODBuffers.set(chunk, neighborLODBuffer);
 
 		const combinedLightBuffer = device.createBuffer({
 			label: `${chunkLabel} Vertex Light Combined`,
@@ -297,6 +315,10 @@ export class Light {
 		if (resolutionBuffer) {
 			resolutionBuffer.destroy();
 		}
+		const neighborLODBuffer = this.neighborLODBuffers.get(chunk);
+		if (neighborLODBuffer) {
+			neighborLODBuffer.destroy();
+		}
 		this.bindGroups.delete(chunk);
 		this.vertexLightBindGroups.delete(chunk);
 		this.chunkContextBindGroups.delete(chunk);
@@ -306,6 +328,7 @@ export class Light {
 		this.vertexLightCombinedBuffers.delete(chunk);
 		this.chunkWorldPosBuffers.delete(chunk);
 		this.chunkResolutionBuffers.delete(chunk);
+		this.neighborLODBuffers.delete(chunk);
 		this.chunkNeedsUpdate.delete(chunk);
 		this.chunkIterationCounts.delete(chunk);
 		this.chunkNeedsRebake.delete(chunk);
@@ -367,6 +390,35 @@ export class Light {
 
 		// Initialize light buffer
 		device.queue.writeBuffer(chunk.light, 0, initData);
+	}
+
+	private updateNeighborLODs(chunk: Chunk, getNeighborChunks: (chunk: Chunk) => Chunk[]) {
+		const neighborLODBuffer = this.neighborLODBuffers.get(chunk);
+		if (!neighborLODBuffer) return;
+
+		// Initialize with zeros (no neighbors)
+		// Format: two vec4<u32> = 8 u32s total
+		const neighborLODData = new Uint32Array(8);
+
+		// Find neighbors and populate their resolutions
+		// First vec4: -X, +X, -Y, +Y (indices 0-3)
+		// Second vec4: -Z, +Z, unused, unused (indices 4-7)
+		const neighbors = getNeighborChunks(chunk);
+		for (const neighbor of neighbors) {
+			const dx = neighbor.position[0] - chunk.position[0];
+			const dy = neighbor.position[1] - chunk.position[1];
+			const dz = neighbor.position[2] - chunk.position[2];
+
+			if (dx === -1 && dy === 0 && dz === 0) neighborLODData[0] = neighbor.resolution; // -X
+			else if (dx === 1 && dy === 0 && dz === 0) neighborLODData[1] = neighbor.resolution; // +X
+			else if (dx === 0 && dy === -1 && dz === 0) neighborLODData[2] = neighbor.resolution; // -Y
+			else if (dx === 0 && dy === 1 && dz === 0) neighborLODData[3] = neighbor.resolution; // +Y
+			else if (dx === 0 && dy === 0 && dz === -1) neighborLODData[4] = neighbor.resolution; // -Z
+			else if (dx === 0 && dy === 0 && dz === 1) neighborLODData[5] = neighbor.resolution; // +Z
+		}
+
+		// Write to GPU buffer
+		device.queue.writeBuffer(neighborLODBuffer, 0, neighborLODData);
 	}
 
 	private createComputeBindGroup(chunk: Chunk, getNeighborChunks?: (chunk: Chunk) => Chunk[]): GPUBindGroup {

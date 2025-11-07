@@ -170,7 +170,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
 	// Calculate 1D index using the chunk's actual meshlet count
 	let index = id.z * meshlet_count * meshlet_count + id.y * meshlet_count + id.x;
-	let view_proj = context.perspective * context.view;
 
 	let vertexCount = vertexCounts[index];
 
@@ -179,7 +178,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 		// Frustum culling: use fixed 8x8x8 block size
 		let block_pos = vec3<u32>(id);
 		let aabb = get_block_aabb(block_pos);
-		if (test_aabb_frustum(aabb, view_proj)) {
+		if (test_aabb_frustum(aabb, context.view_projection)) {
 			// Density occlusion culling: check if path to camera is blocked
 			if (!test_density_occlusion(block_pos)) {
 				let pointer = atomicAdd(&counter, 1u);

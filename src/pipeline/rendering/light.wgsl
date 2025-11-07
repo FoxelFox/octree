@@ -27,9 +27,20 @@ struct LightConfig {
 @group(0) @binding(7) var<storage, read> neighbor_light_nz: array<vec2<f32>>; // -Z neighbor
 @group(0) @binding(8) var<storage, read> neighbor_light_pz: array<vec2<f32>>; // +Z neighbor
 
+// Neighbor resolutions for LOD-aware sampling
+struct NeighborLODs {
+    // Store resolution of each neighbor (0 means no neighbor)
+    // Order: -X, +X, -Y, +Y (in first vec4)
+    //        -Z, +Z, unused, unused (in second vec4)
+    // Using vec4<u32> for 16-byte alignment required by uniforms
+    resolutions_0: vec4<u32>, // -X, +X, -Y, +Y
+    resolutions_1: vec4<u32>, // -Z, +Z, unused, unused
+}
+
 // Context data (no longer using global context, using per-chunk data instead)
 @group(1) @binding(0) var<uniform> chunk_world_pos: vec4<i32>;
 @group(1) @binding(1) var<uniform> chunk_resolution: vec4<u32>; // vec4 for alignment, only .x is used
+@group(1) @binding(2) var<uniform> neighbor_lods: NeighborLODs;
 
 // Helper function to get the chunk's meshlet count per axis
 fn chunk_meshlet_count() -> u32 {
@@ -58,56 +69,114 @@ fn getDensity(pos: vec3<i32>) -> f32 {
     return f32(density[index]) / (COMPRESSION * COMPRESSION * COMPRESSION);
 }
 
+// Helper to convert 3D position to 1D index for a neighbor chunk with different resolution
+fn to1D_neighbor(pos: vec3<i32>, neighbor_resolution: u32) -> u32 {
+    let size = neighbor_resolution / u32(COMPRESSION);
+    return u32(pos.z) * size * size + u32(pos.y) * size + u32(pos.x);
+}
+
+// Scale coordinates from current chunk space to neighbor chunk space
+// If neighbor has coarser LOD (lower resolution), coordinates need to be scaled down
+// If neighbor has finer LOD (higher resolution), coordinates need to be scaled up
+fn scale_coord_to_neighbor(coord: i32, current_size: i32, neighbor_size: i32) -> i32 {
+    // Scale factor: if current is 32 and neighbor is 16, scale = 0.5
+    // coord in [0, 32) maps to [0, 16)
+    return (coord * neighbor_size) / current_size;
+}
+
 // Get light data at position, including from neighbor chunks
 fn getLightData(pos: vec3<i32>) -> vec2<f32> {
     let size = i32(chunk_meshlet_count());
 
     // Check if we need to sample from a neighbor chunk
     if (pos.x < 0) {
-        // Sample from -X neighbor at their rightmost edge
-        let neighbor_pos = vec3<i32>(size - 1, pos.y, pos.z);
-        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        // Sample from -X neighbor
+        let neighbor_res = neighbor_lods.resolutions_0.x;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        // Scale coordinates to neighbor's resolution
+        let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(neighbor_size - 1, scaled_y, scaled_z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_nx[index];
         }
         return vec2<f32>(0.0, 1.0);
     } else if (pos.x >= size) {
-        // Sample from +X neighbor at their leftmost edge
-        let neighbor_pos = vec3<i32>(0, pos.y, pos.z);
-        if (neighbor_pos.y >= 0 && neighbor_pos.y < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        // Sample from +X neighbor
+        let neighbor_res = neighbor_lods.resolutions_0.y;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(0, scaled_y, scaled_z);
+        if (neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_px[index];
         }
         return vec2<f32>(0.0, 1.0);
     } else if (pos.y < 0) {
         // Sample from -Y neighbor
-        let neighbor_pos = vec3<i32>(pos.x, size - 1, pos.z);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        let neighbor_res = neighbor_lods.resolutions_0.z;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, neighbor_size - 1, scaled_z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_ny[index];
         }
         return vec2<f32>(0.0, 1.0);
     } else if (pos.y >= size) {
         // Sample from +Y neighbor
-        let neighbor_pos = vec3<i32>(pos.x, 0, pos.z);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.z >= 0 && neighbor_pos.z < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        let neighbor_res = neighbor_lods.resolutions_0.w;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, 0, scaled_z);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_py[index];
         }
         return vec2<f32>(0.0, 1.0);
     } else if (pos.z < 0) {
         // Sample from -Z neighbor
-        let neighbor_pos = vec3<i32>(pos.x, pos.y, size - 1);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        let neighbor_res = neighbor_lods.resolutions_1.x;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
+        let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, neighbor_size - 1);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_nz[index];
         }
         return vec2<f32>(0.0, 1.0);
     } else if (pos.z >= size) {
         // Sample from +Z neighbor
-        let neighbor_pos = vec3<i32>(pos.x, pos.y, 0);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < size && neighbor_pos.y >= 0 && neighbor_pos.y < size) {
-            let index = to1D_chunk(vec3<u32>(neighbor_pos));
+        let neighbor_res = neighbor_lods.resolutions_1.y;
+        if (neighbor_res == 0) {
+            return vec2<f32>(0.0, 1.0); // No neighbor
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
+        let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, 0);
+        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size) {
+            let index = to1D_neighbor(neighbor_pos, neighbor_res);
             return neighbor_light_pz[index];
         }
         return vec2<f32>(0.0, 1.0);

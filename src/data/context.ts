@@ -9,6 +9,7 @@ export class ContextUniform {
 		4 * 4 + // inverse view
 		4 * 4 + // perspective
 		4 * 4 + // inverse perspective
+		4 * 4 + // view_projection
 		4 * 4 + // prev view projection
 		2 + // jitter offset
 		3 + // camera velocity
@@ -20,7 +21,7 @@ export class ContextUniform {
 		1 + // sdf_over_relaxation
 		1 + // taa_enabled
 		1 + // hybrid_threshold
-		3, // padding to reach 432 bytes (108 floats * 4 bytes = 432)
+		3, // padding to reach 496 bytes (124 floats * 4 bytes = 496)
 	);
 	uniformBuffer: GPUBuffer;
 	canvas = document.getElementsByTagName("canvas")[0];
@@ -71,7 +72,7 @@ export class ContextUniform {
 		const fov = (60 * Math.PI) / 180;
 		const aspect = this.canvas.width / this.canvas.height;
 		const near = 0.1;
-		const far = 1000;
+		const far = 10000;
 
 		// Create jittered projection matrix for TAA
 		const perspective = mat4.perspective(fov, aspect, near, far);
@@ -80,6 +81,11 @@ export class ContextUniform {
 		this.uniformArray.set(jitteredPerspective, o);
 		o += 16;
 		this.uniformArray.set(mat4.inverse(jitteredPerspective), o);
+		o += 16;
+
+		// Store current view-projection matrix (optimized for vertex shader)
+		const viewProjection = mat4.multiply(jitteredPerspective, view);
+		this.uniformArray.set(viewProjection, o);
 		o += 16;
 
 		// Store previous frame view-projection matrix

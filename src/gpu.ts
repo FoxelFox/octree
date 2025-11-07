@@ -31,6 +31,14 @@ export class GPUContext {
 		lastTKeyPressed: boolean;
 	};
 	hasError: boolean;
+	autoFly: {
+		enabled: boolean;
+		time: number;
+		baseSpeed: number;
+		turnSpeed: number;
+		heightVariation: number;
+		baseHeight: number;
+	};
 
 	constructor() {
 		this.canvas = document.getElementsByTagName("canvas")[0];
@@ -60,6 +68,14 @@ export class GPUContext {
 		this.time = {now: 0, delta: 0};
 		this.taaToggle = {
 			lastTKeyPressed: false,
+		};
+		this.autoFly = {
+			enabled: true,
+			time: 0,
+			baseSpeed: 100, // Forward speed in units per second
+			turnSpeed: 0.3, // How fast the camera turns
+			heightVariation: 20, // How much the height varies
+			baseHeight: 150, // Base flying height
 		};
 
 		window.addEventListener("resize", this.setCanvasSize);
@@ -209,9 +225,19 @@ export class GPUContext {
 
 	handlePointerLockChange = () => {
 		this.mouse.locked = document.pointerLockElement === this.canvas;
+		// Disable auto-fly when user takes control
+		if (this.mouse.locked) {
+			this.autoFly.enabled = false;
+		}
 	};
 
 	updateCamera() {
+		// Auto-fly mode when mouse is not locked
+		if (!this.mouse.locked && this.autoFly.enabled) {
+			this.updateAutoFly();
+			return;
+		}
+
 		if (!this.mouse.locked) return;
 
 		const speedMultiplier =
@@ -262,6 +288,42 @@ export class GPUContext {
 		this.camera.position[0] += this.camera.velocity[0] * this.time.delta;
 		this.camera.position[1] += this.camera.velocity[1] * this.time.delta;
 		this.camera.position[2] += this.camera.velocity[2] * this.time.delta;
+	}
+
+	updateAutoFly() {
+		// Update time
+		this.autoFly.time += this.time.delta;
+
+		// Smooth turns using sine waves with different frequencies
+		// This creates a natural, curving flight path
+		const yawOffset = Math.sin(this.autoFly.time * this.autoFly.turnSpeed) * 0.1 +
+			Math.sin(this.autoFly.time * this.autoFly.turnSpeed * 0.5) * 0.05;
+
+		// Smoothly vary pitch to look up and down
+		const pitchOffset = Math.sin(this.autoFly.time * this.autoFly.turnSpeed * 0.7) * 0.15;
+
+		// Vary height smoothly
+		const heightOffset = Math.sin(this.autoFly.time * this.autoFly.turnSpeed * 0.4) * this.autoFly.heightVariation;
+
+		// Update camera orientation with smooth turns
+		this.camera.yaw += yawOffset * this.time.delta;
+		this.camera.pitch = -0.2 + pitchOffset; // Slight downward look with variation
+
+		// Calculate forward direction based on current yaw and pitch
+		const forward = [
+			Math.sin(this.camera.yaw) * Math.cos(this.camera.pitch),
+			Math.sin(this.camera.pitch),
+			Math.cos(this.camera.yaw) * Math.cos(this.camera.pitch),
+		];
+
+		// Move camera forward in the direction it's facing
+		const speed = this.autoFly.baseSpeed * this.time.delta;
+		this.camera.position[0] += forward[0] * speed;
+		this.camera.position[1] = this.autoFly.baseHeight + heightOffset;
+		this.camera.position[2] += forward[2] * speed;
+
+		// Reset velocity during auto-fly
+		this.camera.velocity = [0, 0, 0];
 	}
 
 }

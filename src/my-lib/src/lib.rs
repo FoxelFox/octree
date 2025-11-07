@@ -86,11 +86,25 @@ impl MeshResult {
 }
 
 #[wasm_bindgen]
-pub fn generate_mesh(x: i32, y: i32, z: i32, lod: u32) -> MeshResult {
+pub fn generate_mesh(x: i32, y: i32, z: i32, lod: u32, neighbor_lods: Vec<u32>) -> MeshResult {
     let scale = 2_u32.pow(lod) as f32;
     let resolution = (256.0 / scale) as u32;
 
-    let chunk = mesh::generate_mesh(x, y, z, resolution, scale);
+    // neighbor_lods order: -X, +X, -Y, +Y, -Z, +Z (use 255 for no neighbor)
+    let neighbor_lods_array: [u32; 6] = if neighbor_lods.len() >= 6 {
+        [
+            neighbor_lods[0],
+            neighbor_lods[1],
+            neighbor_lods[2],
+            neighbor_lods[3],
+            neighbor_lods[4],
+            neighbor_lods[5],
+        ]
+    } else {
+        [255, 255, 255, 255, 255, 255] // Default: no neighbors
+    };
+
+    let chunk = mesh::generate_mesh(x, y, z, resolution, scale, neighbor_lods_array);
 
     unsafe {
         // Create JS-owned copies of the data (not views into WASM memory)

@@ -14,11 +14,14 @@ onmessage = async (e: MessageEvent<Request>) => {
 	switch (e.data.operation) {
 		case 'noise_for_chunk':
 			// Generate mesh and get typed arrays directly from Rust
+			// args: [x, y, z, lod, neighborLODs]
+			const neighborLODs = e.data.args[4] || [255, 255, 255, 255, 255, 255];
 			const meshResult = generate_mesh(
-				e.data.args[0],
-				e.data.args[1],
-				e.data.args[2],
-				e.data.args[3]
+				e.data.args[0], // x
+				e.data.args[1], // y
+				e.data.args[2], // z
+				e.data.args[3], // lod
+				neighborLODs     // neighbor LODs array
 			);
 
 			// Copy from WASM memory to JS-owned typed arrays

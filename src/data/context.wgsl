@@ -10,6 +10,7 @@ struct Context {
   inverse_view: mat4x4<f32>,
   perspective: mat4x4<f32>,
   inverse_perspective: mat4x4<f32>,
+  view_projection: mat4x4<f32>,
   prev_view_projection: mat4x4<f32>,
   jitter_offset: vec2<f32>,
   camera_velocity: vec3<f32>,

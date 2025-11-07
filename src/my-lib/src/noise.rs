@@ -72,19 +72,19 @@ fn sample_noise(x: f32, y: f32, z: f32) -> f32 {
 fn generate_sin_noise(pos: [f32; 3]) -> f32 {
     // Multi-octave noise terrain
     // Large scale features
-    let scale1 = 0.02;
+    let scale1 = 0.005;
     let octave1 = sample_noise(pos[0] * scale1, pos[1] * scale1, pos[2] * scale1) * 30.0;
 
     // Medium scale features
-    let scale2 = 0.05;
-    let octave2 = sample_noise(pos[0] * scale2, pos[1] * scale2, pos[2] * scale2) * 15.0;
+    let scale2 = 0.01;
+    let octave2 = sample_noise(pos[0] * scale2, pos[1] * scale2, pos[2] * scale2) * 20.0;
 
     // Fine detail
-    let scale3 = 0.15;
-    let octave3 = sample_noise(pos[0] * scale3, pos[1] * scale3, pos[2] * scale3) * 5.0;
+    let scale3 = 0.05;
+    let octave3 = sample_noise(pos[0] * scale3, pos[1] * scale3, pos[2] * scale3) * 10.0;
 
     // Combine layers
-    let surface_height = 128.0 + octave1 + octave2 + octave3;
+    let surface_height = 16.0 + octave1 * octave1 * 0.24 + octave2 * octave2 * 0.14 - octave3;
 
     // SDF: distance from current Y to surface
     pos[1] - surface_height // negative below, positive above

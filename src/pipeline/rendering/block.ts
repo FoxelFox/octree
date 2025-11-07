@@ -7,38 +7,116 @@ import {
 	gridSize,
 } from "../../index";
 import shader from "./block.wgsl" with { type: "text" };
-import deferredShader from "./block_deferred.wgsl" with { type: "text" };
 import spaceBackgroundShader from "../generation/space_background.wgsl" with { type: "text" };
 import { Chunk } from "../../chunk/chunk";
 
-export class Block {
-	// G-buffer pass
-	gBufferPipeline: GPURenderPipeline;
-	gBufferBindGroups = new Map<Chunk, GPUBindGroup>();
-	gBufferUniformBindGroup: GPUBindGroup;
+// Simple shader for rendering space background as full-screen quad
+const spaceBackgroundQuadShader = `
+struct Context {
+  resolution: vec2<f32>,
+  mouse_abs: vec2<f32>,
+  mouse_rel: vec2<f32>,
+  time: f32,
+  delta: f32,
+  grid_size: u32,
+  max_depth: u32,
+  view: mat4x4<f32>,
+  inverse_view: mat4x4<f32>,
+  perspective: mat4x4<f32>,
+  inverse_perspective: mat4x4<f32>,
+  prev_view_projection: mat4x4<f32>,
+  jitter_offset: vec2<f32>,
+  camera_velocity: vec3<f32>,
+  frame_count: u32,
+  random_seed: f32,
+  sdf_epsilon: f32,
+  sdf_max_steps: u32,
+  sdf_over_relaxation: f32,
+  hybrid_threshold: f32,
+}
 
-	// Deferred lighting pass
-	deferredPipeline: GPURenderPipeline;
-	deferredBindGroup: GPUBindGroup;
-	deferredUniformBindGroups = new Map<Chunk, GPUBindGroup>();
-	deferredSpaceBindGroup: GPUBindGroup;
-	chunkWorldPosBuffers = new Map<Chunk, GPUBuffer>();
+@group(0) @binding(0) var<uniform> context: Context;
+@group(1) @binding(0) var space_background_texture: texture_2d<f32>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    // Full-screen quad
+    const pos = array(
+        vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0),
+        vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0),
+    );
+    return vec4(pos[i], 0.0, 1.0);
+}
+
+// Convert ray direction to UV for texture sampling
+fn ray_direction_to_uv(ray_dir: vec3<f32>) -> vec2<f32> {
+    // Convert cartesian to spherical coordinates
+    let theta = atan2(ray_dir.z, ray_dir.x); // Azimuth
+    let phi = acos(ray_dir.y); // Elevation
+
+    // Convert to UV coordinates
+    let u = (theta + 3.14159265) / (2.0 * 3.14159265); // 0 to 1
+    let v = phi / 3.14159265; // 0 to 1
+
+    return vec2<f32>(u, v);
+}
+
+// Sample space background with separate nebula and stars
+fn sample_space_background(ray_dir: vec3<f32>) -> vec3<f32> {
+    let uv = ray_direction_to_uv(ray_dir);
+    let texture_size = textureDimensions(space_background_texture);
+    let coord = vec2<i32>(uv * vec2<f32>(texture_size));
+    let data = textureLoad(space_background_texture, coord, 0);
+
+    let nebula = data.rgb;
+    let star_intensity = data.a;
+
+    // Reconstruct star color from intensity (approximate original colors)
+    let star_color = vec3<f32>(1.0, 0.9, 0.8) * star_intensity;
+
+    return nebula + star_color;
+}
+
+// Calculate ray direction from UV coordinates
+fn calculate_ray_direction(uv: vec2<f32>, camera_pos: vec3<f32>) -> vec3<f32> {
+    let ndc = vec4<f32>((uv - 0.5) * 2.0 * vec2<f32>(1.0, -1.0), 0.0, 1.0);
+    let view_pos = context.inverse_perspective * ndc;
+    let world_pos_bg = context.inverse_view * vec4<f32>(view_pos.xyz / view_pos.w, 1.0);
+    return normalize(world_pos_bg.xyz - camera_pos);
+}
+
+@fragment
+fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = frag_coord.xy / context.resolution;
+    let camera_pos = context.inverse_view[3].xyz;
+    let ray_dir = calculate_ray_direction(uv, camera_pos);
+    let space_color = sample_space_background(ray_dir);
+    return vec4<f32>(space_color, 1.0);
+}
+`;
+
+export class Block {
+	// Forward rendering pipeline
+	forwardPipeline: GPURenderPipeline;
+	forwardBindGroups = new Map<Chunk, GPUBindGroup>();
+	forwardUniformBindGroup: GPUBindGroup;
+	forwardSpaceBindGroup: GPUBindGroup;
 
 	// Space background
 	spaceBackgroundTexture: GPUTexture;
 	spaceBackgroundPipeline: GPUComputePipeline;
 	spaceBackgroundBindGroup: GPUBindGroup;
+	spaceBackgroundQuadPipeline: GPURenderPipeline;
+	spaceBackgroundQuadContextBindGroup: GPUBindGroup;
+	spaceBackgroundQuadTextureBindGroup: GPUBindGroup;
+
+	// Depth texture for forward rendering
+	depthTexture: GPUTexture;
 
 	initialized: boolean;
 
-	// G-buffer textures
-	positionTexture: GPUTexture;
-	normalTexture: GPUTexture;
-	diffuseTexture: GPUTexture;
-	depthTexture: GPUTexture;
-
 	constructor() {
-		this.createGBufferTextures();
+		this.createDepthTexture();
 		this.createSpaceBackgroundTexture();
 
 		// Create space background compute pipeline
@@ -62,24 +140,42 @@ export class Block {
 			],
 		});
 
-		// Create G-buffer pipeline
-		this.gBufferPipeline = device.createRenderPipeline({
-			label: "Block G-Buffer",
+		// Create space background quad rendering pipeline
+		this.spaceBackgroundQuadPipeline = device.createRenderPipeline({
+			label: "Space Background Quad",
 			layout: "auto",
 			fragment: {
 				module: device.createShaderModule({
-					label: "Block G-Buffer Fragment Shader",
-					code: shader,
+					label: "Space Background Quad Fragment Shader",
+					code: spaceBackgroundQuadShader,
 				}),
-				targets: [
-					{ format: "rgba32float" }, // Position
-					{ format: "rgba16float" }, // Normal
-					{ format: "rgba8unorm" }, // Diffuse
-				],
+				targets: [{ format: "bgra8unorm" }],
 			},
 			vertex: {
 				module: device.createShaderModule({
-					label: "Block G-Buffer Vertex Shader",
+					label: "Space Background Quad Vertex Shader",
+					code: spaceBackgroundQuadShader,
+				}),
+			},
+			primitive: {
+				topology: "triangle-list",
+			},
+		});
+
+		// Create forward rendering pipeline
+		this.forwardPipeline = device.createRenderPipeline({
+			label: "Block Forward Rendering",
+			layout: "auto",
+			fragment: {
+				module: device.createShaderModule({
+					label: "Block Forward Fragment Shader",
+					code: shader,
+				}),
+				targets: [{ format: "bgra8unorm" }],
+			},
+			vertex: {
+				module: device.createShaderModule({
+					label: "Block Forward Vertex Shader",
 					code: shader,
 				}),
 			},
@@ -94,103 +190,47 @@ export class Block {
 			},
 		});
 
-		// Create deferred lighting pipeline
-		this.deferredPipeline = device.createRenderPipeline({
-			label: "Block Deferred Lighting",
-			layout: "auto",
-			fragment: {
-				module: device.createShaderModule({
-					label: "Block Deferred Fragment Shader",
-					code: deferredShader,
-				}),
-				targets: [
-					{
-						format: "bgra8unorm",
-						blend: {
-							color: {
-								srcFactor: "src-alpha",
-								dstFactor: "one-minus-src-alpha",
-								operation: "add",
-							},
-							alpha: {
-								srcFactor: "one",
-								dstFactor: "one-minus-src-alpha",
-								operation: "add",
-							},
-						},
-					},
-				],
-			},
-			vertex: {
-				module: device.createShaderModule({
-					label: "Block Deferred Vertex Shader",
-					code: deferredShader,
-				}),
-			},
-			primitive: {
-				topology: "triangle-list",
-			},
-		});
-
-		this.gBufferUniformBindGroup = device.createBindGroup({
-			label: "Block G-Buffer Context",
-			layout: this.gBufferPipeline.getBindGroupLayout(1),
+		this.forwardUniformBindGroup = device.createBindGroup({
+			label: "Block Forward Context",
+			layout: this.forwardPipeline.getBindGroupLayout(1),
 			entries: [{ binding: 0, resource: { buffer: contextUniform.uniformBuffer } }],
 		});
 
-		this.createDeferredBindGroup();
+		this.forwardSpaceBindGroup = device.createBindGroup({
+			label: "Forward Space Background",
+			layout: this.forwardPipeline.getBindGroupLayout(2),
+			entries: [
+				{ binding: 0, resource: this.spaceBackgroundTexture.createView() },
+			],
+		});
 
-		// Create deferred space bind group for space background texture
-		this.deferredSpaceBindGroup = device.createBindGroup({
-			label: "Deferred Space Background",
-			layout: this.deferredPipeline.getBindGroupLayout(2),
+		// Create space background quad bind groups
+		this.spaceBackgroundQuadContextBindGroup = device.createBindGroup({
+			label: "Space Background Quad Context",
+			layout: this.spaceBackgroundQuadPipeline.getBindGroupLayout(0),
+			entries: [{ binding: 0, resource: { buffer: contextUniform.uniformBuffer } }],
+		});
+
+		this.spaceBackgroundQuadTextureBindGroup = device.createBindGroup({
+			label: "Space Background Quad Texture",
+			layout: this.spaceBackgroundQuadPipeline.getBindGroupLayout(1),
 			entries: [
 				{ binding: 0, resource: this.spaceBackgroundTexture.createView() },
 			],
 		});
 	}
 
-	createGBufferTextures() {
-		// Destroy existing textures
-		if (this.positionTexture) this.positionTexture.destroy();
-		if (this.normalTexture) this.normalTexture.destroy();
-		if (this.diffuseTexture) this.diffuseTexture.destroy();
+	createDepthTexture() {
+		// Destroy existing texture
 		if (this.depthTexture) this.depthTexture.destroy();
 
 		const size = { width: canvas.width, height: canvas.height };
-
-		// Position texture (RGBA32Float for high precision world positions)
-		this.positionTexture = device.createTexture({
-			size,
-			format: "rgba32float",
-			usage:
-				GPUTextureUsage.RENDER_ATTACHMENT |
-				GPUTextureUsage.TEXTURE_BINDING |
-				GPUTextureUsage.COPY_SRC,
-		});
-
-		// Normal texture (RGBA16Float is sufficient for normals)
-		this.normalTexture = device.createTexture({
-			size,
-			format: "rgba16float",
-			usage:
-				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
-
-		// Diffuse color texture (RGBA8Unorm for colors)
-		this.diffuseTexture = device.createTexture({
-			size,
-			format: "rgba8unorm",
-			usage:
-				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-		});
 
 		// Depth texture
 		this.depthTexture = device.createTexture({
 			size,
 			format: "depth24plus",
-			usage:
-				GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+			usage: GPUTextureUsage.RENDER_ATTACHMENT,
 		});
 	}
 
@@ -229,37 +269,41 @@ export class Block {
 			this.generateSpaceBackground(commandEncoder);
 		}
 
-		// Recreate G-buffer textures if canvas size changed
+		// Recreate depth texture if canvas size changed
 		if (
 			this.depthTexture.width !== canvas.width ||
 			this.depthTexture.height !== canvas.height
 		) {
-			this.createGBufferTextures();
-			// Need to recreate deferred bind groups with new textures
-			this.createDeferredBindGroup();
+			this.createDepthTexture();
 		}
 
-		// Pass 1: G-buffer generation for all chunks
-		const gBufferPass = commandEncoder.beginRenderPass({
-			label: "Block G-Buffer",
+		// Pass 1: Render space background (full-screen quad)
+		const backgroundPass = commandEncoder.beginRenderPass({
+			label: "Space Background",
 			colorAttachments: [
 				{
-					view: this.positionTexture.createView(),
+					view: context.getCurrentTexture().createView(),
 					loadOp: "clear",
 					storeOp: "store",
-					clearValue: { r: 0, g: 0, b: 0, a: 0 },
+					clearValue: { r: 0, g: 0, b: 0, a: 1 },
 				},
+			],
+		});
+
+		backgroundPass.setPipeline(this.spaceBackgroundQuadPipeline);
+		backgroundPass.setBindGroup(0, this.spaceBackgroundQuadContextBindGroup);
+		backgroundPass.setBindGroup(1, this.spaceBackgroundQuadTextureBindGroup);
+		backgroundPass.draw(6); // Full-screen quad
+		backgroundPass.end();
+
+		// Pass 2: Forward render all chunks on top of background
+		const forwardPass = commandEncoder.beginRenderPass({
+			label: "Block Forward Rendering",
+			colorAttachments: [
 				{
-					view: this.normalTexture.createView(),
-					loadOp: "clear",
+					view: context.getCurrentTexture().createView(),
+					loadOp: "load", // Load the background we just rendered
 					storeOp: "store",
-					clearValue: { r: 0, g: 0, b: 0, a: 0 },
-				},
-				{
-					view: this.diffuseTexture.createView(),
-					loadOp: "clear",
-					storeOp: "store",
-					clearValue: { r: 0, g: 0, b: 0, a: 0 },
 				},
 			],
 			depthStencilAttachment: {
@@ -270,17 +314,18 @@ export class Block {
 			},
 		});
 
-		gBufferPass.setPipeline(this.gBufferPipeline);
+		forwardPass.setPipeline(this.forwardPipeline);
 
-		// Render all chunks into G-buffer
+		// Render all chunks in a single pass
 		for (const chunk of chunks) {
-			gBufferPass.setBindGroup(0, this.gBufferBindGroups.get(chunk));
-			gBufferPass.setBindGroup(1, this.gBufferUniformBindGroup);
+			forwardPass.setBindGroup(0, this.forwardBindGroups.get(chunk));
+			forwardPass.setBindGroup(1, this.forwardUniformBindGroup);
+			forwardPass.setBindGroup(2, this.forwardSpaceBindGroup);
 
 			// Draw instances for each mesh chunk (only if culling data is ready)
 			if (chunk.indicesArray && chunk.indicesArray.length > 0 && chunk.indicesBuffer) {
 				// Set index buffer for indexed rendering
-				gBufferPass.setIndexBuffer(chunk.indicesBuffer, "uint32");
+				forwardPass.setIndexBuffer(chunk.indicesBuffer, "uint32");
 
 				const maxMeshIndex = Math.pow(gridSize / compression, 3) - 1;
 				for (let i = 0; i < chunk.indicesArray.length; ++i) {
@@ -292,7 +337,7 @@ export class Block {
 					) {
 						// Use indexed indirect draw (20 bytes per command: 5 u32s)
 						// Command format: indexCount, instanceCount, firstIndex, baseVertex, firstInstance
-						gBufferPass.drawIndexedIndirect(chunk.commands, meshIndex * 20);
+						forwardPass.drawIndexedIndirect(chunk.commands, meshIndex * 20);
 					} else if (meshIndex > maxMeshIndex) {
 						console.warn(
 							`Mesh index ${meshIndex} exceeds maximum ${maxMeshIndex}, skipping`,
@@ -302,54 +347,14 @@ export class Block {
 			}
 		}
 
-		gBufferPass.end();
-
-		// Pass 2: Deferred lighting with background
-		// We need to do this for each chunk because each chunk has different light data
-		// Use "load" after the first chunk to preserve previous results
-		let isFirstChunk = true;
-		for (const chunk of chunks) {
-			const deferredPass = commandEncoder.beginRenderPass({
-				label: `Block Deferred Lighting - Chunk ${chunk.id}`,
-				colorAttachments: [
-					{
-						view: context.getCurrentTexture().createView(),
-						loadOp: isFirstChunk ? "clear" : "load",
-						storeOp: "store",
-						clearValue: { r: 0, g: 0, b: 0, a: 0 },
-					},
-				],
-			});
-
-			deferredPass.setPipeline(this.deferredPipeline);
-			deferredPass.setBindGroup(0, this.deferredUniformBindGroups.get(chunk)!);
-			deferredPass.setBindGroup(1, this.deferredBindGroup);
-			deferredPass.setBindGroup(2, this.deferredSpaceBindGroup);
-			deferredPass.draw(6); // Full-screen quad
-
-			deferredPass.end();
-			isFirstChunk = false;
-		}
-	}
-
-	createDeferredBindGroup() {
-		this.deferredBindGroup = device.createBindGroup({
-			label: "Deferred G-Buffer Textures",
-			layout: this.deferredPipeline.getBindGroupLayout(1),
-			entries: [
-				{ binding: 0, resource: this.positionTexture.createView() },
-				{ binding: 1, resource: this.normalTexture.createView() },
-				{ binding: 2, resource: this.diffuseTexture.createView() },
-				{ binding: 3, resource: this.depthTexture.createView() },
-			],
-		});
+		forwardPass.end();
 	}
 
 	registerChunk(chunk: Chunk) {
-		// Create G-buffer bind groups
-		const gBufferBindGroup = device.createBindGroup({
-			label: "Block G-Buffer Meshes",
-			layout: this.gBufferPipeline.getBindGroupLayout(0),
+		// Create forward rendering bind group
+		const forwardBindGroup = device.createBindGroup({
+			label: "Block Forward Meshes",
+			layout: this.forwardPipeline.getBindGroupLayout(0),
 			entries: [
 				{ binding: 1, resource: { buffer: chunk.vertices } },
 				{ binding: 2, resource: { buffer: chunk.normals } },
@@ -357,43 +362,10 @@ export class Block {
 			],
 		});
 
-		this.gBufferBindGroups.set(chunk, gBufferBindGroup);
-
-		// Create chunk world position buffer
-		const chunkLabel = `Chunk[${chunk.id}](${chunk.position[0]},${chunk.position[1]},${chunk.position[2]})`;
-		const chunkWorldPosBuffer = device.createBuffer({
-			label: `${chunkLabel} Block World Position`,
-			size: 16, // vec3<i32> + padding = 16 bytes
-			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-		});
-
-		// Write chunk world position (in voxels)
-		const chunkWorldPosData = new Int32Array([
-			chunk.position[0] * gridSize,
-			chunk.position[1] * gridSize,
-			chunk.position[2] * gridSize,
-			0, // padding
-		]);
-		device.queue.writeBuffer(chunkWorldPosBuffer, 0, chunkWorldPosData);
-
-		// Create deferred uniform bind group with chunk world position
-		const deferredUniformBindGroup = device.createBindGroup({
-			label: "Deferred Context",
-			layout: this.deferredPipeline.getBindGroupLayout(0),
-			entries: [
-				{ binding: 0, resource: { buffer: contextUniform.uniformBuffer } },
-				{ binding: 1, resource: { buffer: chunkWorldPosBuffer } },
-			],
-		});
-
-		this.deferredUniformBindGroups.set(chunk, deferredUniformBindGroup);
-		this.chunkWorldPosBuffers.set(chunk, chunkWorldPosBuffer);
+		this.forwardBindGroups.set(chunk, forwardBindGroup);
 	}
 
 	unregisterChunk(chunk: Chunk) {
-		this.deferredUniformBindGroups.delete(chunk);
-		this.chunkWorldPosBuffers.get(chunk)?.destroy();
-		this.chunkWorldPosBuffers.delete(chunk);
-		this.gBufferBindGroups.delete(chunk);
+		this.forwardBindGroups.delete(chunk);
 	}
 }

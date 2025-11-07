@@ -442,7 +442,15 @@ impl Chunk {
     }
 }
 
-pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chunk {
+pub fn generate_mesh(
+    x: i32,
+    y: i32,
+    z: i32,
+    resolution: u32,
+    scale: f32,
+    neighbor_lods: [u32; 6],
+) -> Chunk {
+    // neighbor_lods order: -X, +X, -Y, +Y, -Z, +Z (255 means no neighbor)
     // COMPRESSION must be constant 8 to maintain meshlet structure
     const COMPRESSION: u32 = 8;
     let s_size = resolution / COMPRESSION;
@@ -463,7 +471,7 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
             let y = (idx / voxel_size as usize) % voxel_size as usize;
 
             // Create rainbow based on y position (height from 0.0 to 1.0)
-            let t = (y as f32 / voxel_size as f32) * 16.0;
+            let t = (y as f32 / voxel_size as f32) * 8.0 + 16.0;
             let r = ((t.sin() * 127.5 + 127.5).clamp(0.0, 255.0) as u32) & 0xFF;
             let g = (((t + 2.0).sin() * 127.5 + 127.5).clamp(0.0, 255.0) as u32) & 0xFF;
             let b = (((t + 4.0).sin() * 127.5 + 127.5).clamp(0.0, 255.0) as u32) & 0xFF;
@@ -753,6 +761,16 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
         }
     }
 
+    // Adjust boundary vertices to align with coarser LOD neighbors
+    // This reduces gaps at LOD transitions
+    // DISABLED FOR NOW - causing issues
+    // adjust_boundary_vertices_for_lod(
+    //     &mut all_vertices,
+    //     resolution,
+    //     scale,
+    //     neighbor_lods,
+    // );
+
     Chunk {
         commands,
         vertex_counts,
@@ -762,5 +780,110 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, resolution: u32, scale: f32) -> Chu
         material_colors: all_material_colors,
         colors: all_colors,
         indices: all_indices,
+    }
+}
+
+// Adjust vertices at chunk boundaries to align with coarser neighbor grids
+// This prevents gaps when adjacent chunks have different LOD levels
+fn adjust_boundary_vertices_for_lod(
+    vertices: &mut Vec<f32>,
+    resolution: u32,
+    scale: f32,
+    neighbor_lods: [u32; 6],
+) {
+    let chunk_size = resolution as f32 * scale;
+    let boundary_threshold = scale * 0.5; // Half a voxel's worth of tolerance
+
+    // Process each vertex (vertices are stored as vec4<f32>: [x, y, z, 1.0])
+    for i in (0..vertices.len()).step_by(4) {
+        let mut x = vertices[i];
+        let mut y = vertices[i + 1];
+        let mut z = vertices[i + 2];
+
+        // Check each face and snap to coarser neighbor grid if needed
+        // Face order: -X(0), +X(1), -Y(2), +Y(3), -Z(4), +Z(5)
+
+        // Only snap if we're at a boundary AND the neighbor has a coarser LOD
+        // 255 means no neighbor exists
+        let current_lod = (scale.log2()) as u32;
+
+        // -X face (x near 0)
+        if x < boundary_threshold {
+            if neighbor_lods[0] != 255 && neighbor_lods[0] < 10 {
+                // Sanity check: valid LOD is 0-2
+                let neighbor_lod = neighbor_lods[0];
+                if neighbor_lod > current_lod {
+                    // Neighbor is coarser, snap to their grid
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    y = (y / neighbor_scale).round() * neighbor_scale;
+                    z = (z / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // +X face (x near chunk_size)
+        if x > chunk_size - boundary_threshold {
+            if neighbor_lods[1] != 255 && neighbor_lods[1] < 10 {
+                let neighbor_lod = neighbor_lods[1];
+                if neighbor_lod > current_lod {
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    y = (y / neighbor_scale).round() * neighbor_scale;
+                    z = (z / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // -Y face (y near 0)
+        if y < boundary_threshold {
+            if neighbor_lods[2] != 255 && neighbor_lods[2] < 10 {
+                let neighbor_lod = neighbor_lods[2];
+                if neighbor_lod > current_lod {
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    x = (x / neighbor_scale).round() * neighbor_scale;
+                    z = (z / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // +Y face (y near chunk_size)
+        if y > chunk_size - boundary_threshold {
+            if neighbor_lods[3] != 255 && neighbor_lods[3] < 10 {
+                let neighbor_lod = neighbor_lods[3];
+                if neighbor_lod > current_lod {
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    x = (x / neighbor_scale).round() * neighbor_scale;
+                    z = (z / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // -Z face (z near 0)
+        if z < boundary_threshold {
+            if neighbor_lods[4] != 255 && neighbor_lods[4] < 10 {
+                let neighbor_lod = neighbor_lods[4];
+                if neighbor_lod > current_lod {
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    x = (x / neighbor_scale).round() * neighbor_scale;
+                    y = (y / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // +Z face (z near chunk_size)
+        if z > chunk_size - boundary_threshold {
+            if neighbor_lods[5] != 255 && neighbor_lods[5] < 10 {
+                let neighbor_lod = neighbor_lods[5];
+                if neighbor_lod > current_lod {
+                    let neighbor_scale = 2_u32.pow(neighbor_lod) as f32;
+                    x = (x / neighbor_scale).round() * neighbor_scale;
+                    y = (y / neighbor_scale).round() * neighbor_scale;
+                }
+            }
+        }
+
+        // Write back adjusted coordinates
+        vertices[i] = x;
+        vertices[i + 1] = y;
+        vertices[i + 2] = z;
     }
 }
