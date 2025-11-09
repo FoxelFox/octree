@@ -4,7 +4,7 @@
 const HORIZON_HEIGHT = 0.0; // Y-coordinate where horizon starts
 const SKY_TOP_COLOR = vec3<f32>(0.7, 0.7, 0.8); // Dark blue at top
 const SKY_MIDDLE_COLOR = vec3<f32>(0.8, 0.5, 0.3); // Lighter blue in middle
-const HORIZON_COLOR = vec3<f32>(0.9, 0.7, 0.5); // Warm orange/yellow at horizon
+const HORIZON_COLOR = vec3<f32>(0.3, 0.2, 1.0); // Warm orange/yellow at horizon
 const HORIZON_GLOW_COLOR = vec3<f32>(0.95, 0.75, 0.55); // Softer glow near horizon
 const HORIZON_INTENSITY = 0.3;
 const SKY_GRADIENT_POWER = 2.0;

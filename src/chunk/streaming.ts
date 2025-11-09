@@ -143,8 +143,8 @@ export class Streaming {
 	nextChunkId = 1;
 	activeChunks = new Set<Chunk>();
 	// LOD 2: distance > LOD_THRESHOLDS[1] (lowest quality)
-	private readonly LOD_THRESHOLDS = [2.5, 5];
-	private readonly LOD_HYSTERESIS = 0.2;
+	private readonly LOD_THRESHOLDS = [0.5, 2.5];
+	private readonly LOD_HYSTERESIS = 0.5;
 	private frustum = new Frustum();
 	private frustumReady = false;
 

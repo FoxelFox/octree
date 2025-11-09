@@ -1,6 +1,6 @@
 extern crate wasm_bindgen;
 
-use js_sys::{Float32Array, Uint32Array};
+use js_sys::{Float32Array, Uint16Array, Uint32Array};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -46,7 +46,7 @@ pub struct MeshResult {
     commands: Uint32Array,
     densities: Uint32Array,
     vertex_counts: Uint32Array,
-    indices: Uint32Array,
+    indices: Uint16Array,
 }
 
 #[wasm_bindgen]
@@ -80,7 +80,7 @@ impl MeshResult {
         self.vertex_counts.clone()
     }
     #[wasm_bindgen(getter)]
-    pub fn indices(&self) -> Uint32Array {
+    pub fn indices(&self) -> Uint16Array {
         self.indices.clone()
     }
 }
@@ -130,7 +130,7 @@ pub fn generate_mesh(x: i32, y: i32, z: i32, lod: u32, neighbor_lods: Vec<u32>) 
             commands: Uint32Array::from(commands_slice),
             densities: Uint32Array::from(densities_slice),
             vertex_counts: Uint32Array::from(vertex_counts_slice),
-            indices: Uint32Array::from(indices_slice),
+            indices: Uint16Array::from(indices_slice),
         }
     }
 }

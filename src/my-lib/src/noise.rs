@@ -70,17 +70,17 @@ fn sample_noise(x: f32, y: f32, z: f32) -> f32 {
 }
 
 fn generate_sin_noise(pos: [f32; 3]) -> f32 {
-    // Domain warping for organic distortion (only use X and Z for heightmap consistency)
+    // Domain warping for organic distortion
     let warp_scale = 0.002;
     let warp_amount = 30.0;
     let warp_x = sample_noise(
         pos[0] * warp_scale,
-        0.0, // Keep Y constant for heightmap terrain
+        pos[1] * warp_scale,
         pos[2] * warp_scale,
     );
     let warp_z = sample_noise(
         (pos[0] + 73.2) * warp_scale,
-        0.0, // Keep Y constant for heightmap terrain
+        (pos[1] + 39.7) * warp_scale,
         (pos[2] + 127.1) * warp_scale,
     );
 
@@ -91,18 +91,17 @@ fn generate_sin_noise(pos: [f32; 3]) -> f32 {
         pos[2] + warp_z * warp_amount,
     ];
 
-    // Fractal noise with 6 octaves - using much larger amplitudes for dramatic terrain
+    // Fractal noise with 5 octaves - using much larger amplitudes for dramatic terrain
     let mut height = 0.0;
-    let mut amplitude = 80.0; // Start with large amplitude for dramatic features
-    let mut frequency = 0.003; // Start with large features
-    let persistence = 0.5; // Each octave is 50% of previous
-    let lacunarity = 2.0; // Each octave doubles frequency
+    let mut amplitude = 80.0;
+    let mut frequency = 0.003;
+    let persistence = 0.3;
+    let lacunarity = 4.0;
 
-    for i in 0..6 {
-        // Sample noise only on horizontal plane for heightmap (2.5D terrain)
+    for i in 0..5 {
         let mut noise_val = sample_noise(
             warped_pos[0] * frequency,
-            0.0, // Keep Y constant for proper heightmap
+            warped_pos[1] * frequency,
             warped_pos[2] * frequency,
         );
 
@@ -112,25 +111,16 @@ fn generate_sin_noise(pos: [f32; 3]) -> f32 {
             noise_val = 1.0 - 2.0 * noise_val.abs(); // Maps to -1 to 1 range with sharp ridges
             noise_val = noise_val * noise_val * noise_val.signum(); // Sharpen the ridges (cubic)
         }
-        // Use billowy noise for octave 2-3 (creates rolling hills)
-        else if i == 2 || i == 3 {
+        // Use billowy noise for octave 2 (creates rolling hills)
+        else if i == 2 {
             noise_val = noise_val.abs() * 2.0 - 1.0; // Billowy (puffy)
         }
-        // Standard noise for fine detail (octaves 4, 5)
+        // Standard noise for fine detail (octaves 3, 4)
 
         height += noise_val * amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;
     }
-
-    // Add some valleys and erosion-like features
-    let erosion_noise = sample_noise(
-        pos[0] * 0.008,
-        0.0,
-        pos[2] * 0.008,
-    );
-    let erosion = erosion_noise * erosion_noise * 15.0; // Gentle valleys
-    height -= erosion.abs();
 
     // Base terrain height - centered around y=32
     let surface_height = 64.0 + height;

@@ -283,17 +283,17 @@ fn calculate_terrain_color(world_pos: [f32; 3], normal: [f32; 3]) -> u32 {
     let flatness = normal[1].abs();
     let slope = (1.0 - flatness).clamp(0.0, 1.0);
 
-    // Height factor normalized (terrain roughly -100 to 220)
-    let height_factor = ((world_pos[1] + 100.0) / 320.0).clamp(0.0, 1.0);
+    let height_factor = ((world_pos[1] + 0.0) / 128.0).clamp(0.0, 1.0);
 
     // Define base material colors (RGB floats)
-    let sand = (194.0, 178.0, 128.0);      // Low elevation
-    let grass = (85.0, 140.0, 50.0);       // Mid elevation
-    let rock = (120.0, 115.0, 100.0);      // Steep slopes
-    let snow = (240.0, 240.0, 245.0);      // High elevation
+    let sand = (194.0, 178.0, 128.0); // Low elevation
+    let grass = (85.0, 140.0, 50.0); // Mid elevation
+    let rock = (120.0, 115.0, 100.0); // Steep slopes
+    let snow = (240.0, 240.0, 245.0); // High elevation
 
     // Calculate material weights with smooth transitions
-    let grass_weight = smoothstep(0.2, 0.4, height_factor) * (1.0 - smoothstep(0.6, 0.75, height_factor));
+    let grass_weight =
+        smoothstep(0.2, 0.4, height_factor) * (1.0 - smoothstep(0.6, 0.75, height_factor));
     let snow_weight = smoothstep(0.65, 0.8, height_factor) * (1.0 - slope);
     let rock_weight = smoothstep(0.35, 0.6, slope) + smoothstep(0.75, 0.85, height_factor) * slope;
     let sand_weight = 1.0 - smoothstep(0.15, 0.35, height_factor);
@@ -311,13 +311,13 @@ fn calculate_terrain_color(world_pos: [f32; 3], normal: [f32; 3]) -> u32 {
     color.1 = sand.1 * sand_w + grass.1 * grass_w + rock.1 * rock_w + snow.1 * snow_w;
     color.2 = sand.2 * sand_w + grass.2 * grass_w + rock.2 * rock_w + snow.2 * snow_w;
 
-    // Add subtle spatial variation
-    let noise_seed = ((world_pos[0] * 0.3 + world_pos[2] * 0.7) as i32 % 17) as f32 / 17.0;
+    // Add subtle spatial variation (using continuous fractional calculation to avoid banding)
+    let noise_seed = ((world_pos[0] * 0.3 + world_pos[2] * 0.7) * 0.05882).fract(); // 0.05882 ≈ 1/17
     let variation = 0.92 + noise_seed * 0.16; // 0.92 to 1.08
 
-    let r = (color.0 * variation).clamp(0.0, 255.0) as u32;
-    let g = (color.1 * variation).clamp(0.0, 255.0) as u32;
-    let b = (color.2 * variation).clamp(0.0, 255.0) as u32;
+    let r = (color.0).clamp(0.0, 255.0) as u32;
+    let g = (color.1).clamp(0.0, 255.0) as u32;
+    let b = (color.2).clamp(0.0, 255.0) as u32;
 
     // Pack as ARGB (0xAABBGGRR in little endian)
     0xFF000000 | (b << 16) | (g << 8) | r
@@ -372,12 +372,26 @@ fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f
             - get_voxel_density(voxels, [0, pos[1] as u32, pos[2] as u32], grid_size))
     } else if pos[0] == max_pos {
         // Backward difference at max boundary (scaled 2x)
-        2.0 * (get_voxel_density(voxels, [max_pos as u32, pos[1] as u32, pos[2] as u32], grid_size)
-            - get_voxel_density(voxels, [(max_pos - 1) as u32, pos[1] as u32, pos[2] as u32], grid_size))
+        2.0 * (get_voxel_density(
+            voxels,
+            [max_pos as u32, pos[1] as u32, pos[2] as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [(max_pos - 1) as u32, pos[1] as u32, pos[2] as u32],
+            grid_size,
+        ))
     } else {
         // Central difference in interior
-        get_voxel_density(voxels, [(pos[0] + 1) as u32, pos[1] as u32, pos[2] as u32], grid_size)
-            - get_voxel_density(voxels, [(pos[0] - 1) as u32, pos[1] as u32, pos[2] as u32], grid_size)
+        get_voxel_density(
+            voxels,
+            [(pos[0] + 1) as u32, pos[1] as u32, pos[2] as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [(pos[0] - 1) as u32, pos[1] as u32, pos[2] as u32],
+            grid_size,
+        )
     };
 
     // Y gradient
@@ -385,11 +399,25 @@ fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f
         2.0 * (get_voxel_density(voxels, [pos[0] as u32, 1, pos[2] as u32], grid_size)
             - get_voxel_density(voxels, [pos[0] as u32, 0, pos[2] as u32], grid_size))
     } else if pos[1] == max_pos {
-        2.0 * (get_voxel_density(voxels, [pos[0] as u32, max_pos as u32, pos[2] as u32], grid_size)
-            - get_voxel_density(voxels, [pos[0] as u32, (max_pos - 1) as u32, pos[2] as u32], grid_size))
+        2.0 * (get_voxel_density(
+            voxels,
+            [pos[0] as u32, max_pos as u32, pos[2] as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [pos[0] as u32, (max_pos - 1) as u32, pos[2] as u32],
+            grid_size,
+        ))
     } else {
-        get_voxel_density(voxels, [pos[0] as u32, (pos[1] + 1) as u32, pos[2] as u32], grid_size)
-            - get_voxel_density(voxels, [pos[0] as u32, (pos[1] - 1) as u32, pos[2] as u32], grid_size)
+        get_voxel_density(
+            voxels,
+            [pos[0] as u32, (pos[1] + 1) as u32, pos[2] as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [pos[0] as u32, (pos[1] - 1) as u32, pos[2] as u32],
+            grid_size,
+        )
     };
 
     // Z gradient
@@ -397,11 +425,25 @@ fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f
         2.0 * (get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, 1], grid_size)
             - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, 0], grid_size))
     } else if pos[2] == max_pos {
-        2.0 * (get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, max_pos as u32], grid_size)
-            - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (max_pos - 1) as u32], grid_size))
+        2.0 * (get_voxel_density(
+            voxels,
+            [pos[0] as u32, pos[1] as u32, max_pos as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [pos[0] as u32, pos[1] as u32, (max_pos - 1) as u32],
+            grid_size,
+        ))
     } else {
-        get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (pos[2] + 1) as u32], grid_size)
-            - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (pos[2] - 1) as u32], grid_size)
+        get_voxel_density(
+            voxels,
+            [pos[0] as u32, pos[1] as u32, (pos[2] + 1) as u32],
+            grid_size,
+        ) - get_voxel_density(
+            voxels,
+            [pos[0] as u32, pos[1] as u32, (pos[2] - 1) as u32],
+            grid_size,
+        )
     };
 
     let gradient = [dx, dy, dz];
@@ -462,7 +504,7 @@ pub struct Chunk {
     normals: Vec<f32>,
     material_colors: Vec<u32>,
     colors: Vec<u32>,
-    indices: Vec<u32>,
+    indices: Vec<u16>,
 }
 
 impl Chunk {
@@ -522,7 +564,7 @@ impl Chunk {
         self.commands.len()
     }
 
-    pub fn indices(&self) -> *const u32 {
+    pub fn indices(&self) -> *const u16 {
         self.indices.as_ptr()
     }
 
@@ -593,7 +635,7 @@ pub fn generate_mesh(
     let mut all_normals = Vec::new();
     let mut all_colors = Vec::new(); // u32 packed for lit colors (initialized same as material_colors)
     let mut all_material_colors = Vec::new(); // u32 packed for material colors
-    let mut all_indices = Vec::new();
+    let mut all_indices: Vec<u16> = Vec::new();
     let mut commands = Vec::new();
     let mut densities = Vec::new();
     let mut vertex_counts = Vec::new();
@@ -614,7 +656,7 @@ pub fn generate_mesh(
                 let mut local_positions = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
                 let mut local_normals = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
                 let mut local_colors = Vec::with_capacity(ESTIMATED_VERTS_PER_MESHLET);
-                let mut local_indices = Vec::with_capacity(ESTIMATED_INDICES_PER_MESHLET);
+                let mut local_indices: Vec<u16> = Vec::with_capacity(ESTIMATED_INDICES_PER_MESHLET);
                 let mut vertex_map: FxHashMap<VertexKey, u32> = FxHashMap::with_capacity_and_hasher(
                     ESTIMATED_VERTS_PER_MESHLET,
                     Default::default(),
@@ -734,7 +776,8 @@ pub fn generate_mesh(
                                         vertex_list[i][1] + chunk_world_pos[1] as f32,
                                         vertex_list[i][2] + chunk_world_pos[2] as f32,
                                     ];
-                                    color_list[i] = calculate_terrain_color(world_vertex_pos, normal_list[i]);
+                                    color_list[i] =
+                                        calculate_terrain_color(world_vertex_pos, normal_list[i]);
                                 }
                             }
 
@@ -807,9 +850,9 @@ pub fn generate_mesh(
                                     );
 
                                     // Add triangle indices
-                                    local_indices.push(idx1);
-                                    local_indices.push(idx2);
-                                    local_indices.push(idx3);
+                                    local_indices.push(idx1 as u16);
+                                    local_indices.push(idx2 as u16);
+                                    local_indices.push(idx3 as u16);
                                 }
 
                                 tri_idx += 3;

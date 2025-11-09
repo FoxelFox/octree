@@ -176,7 +176,7 @@ export class Chunk {
 			size: data.byteLength,
 			usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
 		});
-		
+
 		device.queue.writeBuffer(this.indicesBuffer, 0, data);
 	}
 
