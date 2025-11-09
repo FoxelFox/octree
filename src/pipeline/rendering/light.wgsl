@@ -96,15 +96,14 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
             return vec2<f32>(0.0, 1.0); // No neighbor
         }
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
-        // Scale coordinates to neighbor's resolution
+        // Scale coordinates to neighbor's resolution and clamp for corner/edge cases
         let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
         let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(neighbor_size - 1, scaled_y, scaled_z);
-        if (neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_nx[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_y = clamp(scaled_y, 0, neighbor_size - 1);
+        let clamped_z = clamp(scaled_z, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(neighbor_size - 1, clamped_y, clamped_z);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_nx[index];
     } else if (pos.x >= size) {
         // Sample from +X neighbor
         let neighbor_res = neighbor_lods.resolutions_0.y;
@@ -114,12 +113,11 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
         let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
         let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(0, scaled_y, scaled_z);
-        if (neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_px[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_y = clamp(scaled_y, 0, neighbor_size - 1);
+        let clamped_z = clamp(scaled_z, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(0, clamped_y, clamped_z);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_px[index];
     } else if (pos.y < 0) {
         // Sample from -Y neighbor
         let neighbor_res = neighbor_lods.resolutions_0.z;
@@ -129,12 +127,11 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
         let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
         let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(scaled_x, neighbor_size - 1, scaled_z);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_ny[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_x = clamp(scaled_x, 0, neighbor_size - 1);
+        let clamped_z = clamp(scaled_z, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(clamped_x, neighbor_size - 1, clamped_z);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_ny[index];
     } else if (pos.y >= size) {
         // Sample from +Y neighbor
         let neighbor_res = neighbor_lods.resolutions_0.w;
@@ -144,12 +141,11 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
         let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
         let scaled_z = scale_coord_to_neighbor(pos.z, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(scaled_x, 0, scaled_z);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.z >= 0 && neighbor_pos.z < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_py[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_x = clamp(scaled_x, 0, neighbor_size - 1);
+        let clamped_z = clamp(scaled_z, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(clamped_x, 0, clamped_z);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_py[index];
     } else if (pos.z < 0) {
         // Sample from -Z neighbor
         let neighbor_res = neighbor_lods.resolutions_1.x;
@@ -159,12 +155,11 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
         let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
         let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, neighbor_size - 1);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_nz[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_x = clamp(scaled_x, 0, neighbor_size - 1);
+        let clamped_y = clamp(scaled_y, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(clamped_x, clamped_y, neighbor_size - 1);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_nz[index];
     } else if (pos.z >= size) {
         // Sample from +Z neighbor
         let neighbor_res = neighbor_lods.resolutions_1.y;
@@ -174,12 +169,11 @@ fn getLightData(pos: vec3<i32>) -> vec2<f32> {
         let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
         let scaled_x = scale_coord_to_neighbor(pos.x, size, neighbor_size);
         let scaled_y = scale_coord_to_neighbor(pos.y, size, neighbor_size);
-        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, 0);
-        if (neighbor_pos.x >= 0 && neighbor_pos.x < neighbor_size && neighbor_pos.y >= 0 && neighbor_pos.y < neighbor_size) {
-            let index = to1D_neighbor(neighbor_pos, neighbor_res);
-            return neighbor_light_pz[index];
-        }
-        return vec2<f32>(0.0, 1.0);
+        let clamped_x = clamp(scaled_x, 0, neighbor_size - 1);
+        let clamped_y = clamp(scaled_y, 0, neighbor_size - 1);
+        let neighbor_pos = vec3<i32>(clamped_x, clamped_y, 0);
+        let index = to1D_neighbor(neighbor_pos, neighbor_res);
+        return neighbor_light_pz[index];
     }
 
     // Sample from current chunk

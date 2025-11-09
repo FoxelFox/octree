@@ -31,9 +31,20 @@ struct Command {
 // Light data (chunk + 6 neighbors packed sequentially)
 @group(1) @binding(0) var<storage, read> light_data: array<vec2<f32>>;
 
+// Neighbor resolutions for LOD-aware sampling
+struct NeighborLODs {
+    // Store resolution of each neighbor (0 means no neighbor)
+    // Order: -X, +X, -Y, +Y (in first vec4)
+    //        -Z, +Z, unused, unused (in second vec4)
+    // Using vec4<u32> for 16-byte alignment required by uniforms
+    resolutions_0: vec4<u32>, // -X, +X, -Y, +Y
+    resolutions_1: vec4<u32>, // -Z, +Z, unused, unused
+}
+
 // Context
 @group(2) @binding(0) var<uniform> chunk_world_pos: vec4<i32>;
 @group(2) @binding(1) var<uniform> chunk_resolution: vec4<u32>; // vec4 for alignment, only .x is used
+@group(2) @binding(2) var<uniform> neighbor_lods: NeighborLODs;
 
 // Helper to get chunk's meshlet count
 fn chunk_meshlet_count() -> u32 {
@@ -83,13 +94,33 @@ fn inRange(value: i32, size: i32) -> bool {
     return value >= 0 && value < size;
 }
 
-fn sampleLightSegment(segment: u32, coords: vec3<i32>) -> vec2<f32> {
-    let size_i = i32(lightGridSize());
-    let max_index = size_i - 1;
+// Helper to convert 3D position to 1D index for a neighbor chunk with different resolution
+fn to1D_neighbor(pos: vec3<i32>, neighbor_resolution: u32) -> u32 {
+    let size = neighbor_resolution / u32(COMPRESSION);
+    return u32(pos.z) * size * size + u32(pos.y) * size + u32(pos.x);
+}
+
+// Scale coordinates from current chunk space to neighbor chunk space
+// If neighbor has coarser LOD (lower resolution), coordinates need to be scaled down
+// If neighbor has finer LOD (higher resolution), coordinates need to be scaled up
+fn scale_coord_to_neighbor(coord: i32, current_size: i32, neighbor_size: i32) -> i32 {
+    // Scale factor: if current is 32 and neighbor is 16, scale = 0.5
+    // coord in [0, 32) maps to [0, 16)
+    return (coord * neighbor_size) / current_size;
+}
+
+fn sampleLightSegment(segment: u32, coords: vec3<i32>, neighbor_resolution: u32) -> vec2<f32> {
+    // Calculate the actual grid size for this segment
+    let segment_grid_size = i32(neighbor_resolution / u32(COMPRESSION));
+    let max_index = segment_grid_size - 1;
     let clamped = clampVec3(coords, 0, max_index);
+
+    // Use current chunk's stride for segment offset (all segments use same stride in combined buffer)
     let stride = lightSegmentStride();
-    let size_sq = size_i * size_i;
-    let index_i = clamped.z * size_sq + clamped.y * size_i + clamped.x;
+
+    // Calculate index within the segment using the segment's actual size
+    let size_sq = segment_grid_size * segment_grid_size;
+    let index_i = clamped.z * size_sq + clamped.y * segment_grid_size + clamped.x;
     return light_data[segment * stride + u32(index_i)];
 }
 
@@ -97,49 +128,88 @@ fn sampleLightSegment(segment: u32, coords: vec3<i32>) -> vec2<f32> {
 fn getLightDataAtGrid(grid_pos: vec3<i32>) -> vec2<f32> {
     let size = i32(lightGridSize());
 
+    // Sample from -X neighbor
     if (grid_pos.x < 0) {
-        if (inRange(grid_pos.y, size) && inRange(grid_pos.z, size)) {
-            let neighbor_pos = vec3<i32>(size - 1, grid_pos.y, grid_pos.z);
-            return sampleLightSegment(SEGMENT_NX, neighbor_pos);
+        let neighbor_res = neighbor_lods.resolutions_0.x;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT; // No neighbor
         }
-        return NO_LIGHT;
-    } else if (grid_pos.x >= size) {
-        if (inRange(grid_pos.y, size) && inRange(grid_pos.z, size)) {
-            let neighbor_pos = vec3<i32>(0, grid_pos.y, grid_pos.z);
-            return sampleLightSegment(SEGMENT_PX, neighbor_pos);
-        }
-        return NO_LIGHT;
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        // Scale coordinates to neighbor's resolution
+        let scaled_y = scale_coord_to_neighbor(grid_pos.y, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(grid_pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(neighbor_size - 1, scaled_y, scaled_z);
+        // sampleLightSegment will clamp coordinates internally
+        return sampleLightSegment(SEGMENT_NX, neighbor_pos, neighbor_res);
     }
 
+    // Sample from +X neighbor
+    if (grid_pos.x >= size) {
+        let neighbor_res = neighbor_lods.resolutions_0.y;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT;
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_y = scale_coord_to_neighbor(grid_pos.y, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(grid_pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(0, scaled_y, scaled_z);
+        return sampleLightSegment(SEGMENT_PX, neighbor_pos, neighbor_res);
+    }
+
+    // Sample from -Y neighbor
     if (grid_pos.y < 0) {
-        if (inRange(grid_pos.x, size) && inRange(grid_pos.z, size)) {
-            let neighbor_pos = vec3<i32>(grid_pos.x, size - 1, grid_pos.z);
-            return sampleLightSegment(SEGMENT_NY, neighbor_pos);
+        let neighbor_res = neighbor_lods.resolutions_0.z;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT;
         }
-        return NO_LIGHT;
-    } else if (grid_pos.y >= size) {
-        if (inRange(grid_pos.x, size) && inRange(grid_pos.z, size)) {
-            let neighbor_pos = vec3<i32>(grid_pos.x, 0, grid_pos.z);
-            return sampleLightSegment(SEGMENT_PY, neighbor_pos);
-        }
-        return NO_LIGHT;
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(grid_pos.x, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(grid_pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, neighbor_size - 1, scaled_z);
+        return sampleLightSegment(SEGMENT_NY, neighbor_pos, neighbor_res);
     }
 
+    // Sample from +Y neighbor
+    if (grid_pos.y >= size) {
+        let neighbor_res = neighbor_lods.resolutions_0.w;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT;
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(grid_pos.x, size, neighbor_size);
+        let scaled_z = scale_coord_to_neighbor(grid_pos.z, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, 0, scaled_z);
+        return sampleLightSegment(SEGMENT_PY, neighbor_pos, neighbor_res);
+    }
+
+    // Sample from -Z neighbor
     if (grid_pos.z < 0) {
-        if (inRange(grid_pos.x, size) && inRange(grid_pos.y, size)) {
-            let neighbor_pos = vec3<i32>(grid_pos.x, grid_pos.y, size - 1);
-            return sampleLightSegment(SEGMENT_NZ, neighbor_pos);
+        let neighbor_res = neighbor_lods.resolutions_1.x;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT;
         }
-        return NO_LIGHT;
-    } else if (grid_pos.z >= size) {
-        if (inRange(grid_pos.x, size) && inRange(grid_pos.y, size)) {
-            let neighbor_pos = vec3<i32>(grid_pos.x, grid_pos.y, 0);
-            return sampleLightSegment(SEGMENT_PZ, neighbor_pos);
-        }
-        return NO_LIGHT;
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(grid_pos.x, size, neighbor_size);
+        let scaled_y = scale_coord_to_neighbor(grid_pos.y, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, neighbor_size - 1);
+        return sampleLightSegment(SEGMENT_NZ, neighbor_pos, neighbor_res);
     }
 
-    return sampleLightSegment(SEGMENT_CURRENT, grid_pos);
+    // Sample from +Z neighbor
+    if (grid_pos.z >= size) {
+        let neighbor_res = neighbor_lods.resolutions_1.y;
+        if (neighbor_res == 0u) {
+            return NO_LIGHT;
+        }
+        let neighbor_size = i32(neighbor_res / u32(COMPRESSION));
+        let scaled_x = scale_coord_to_neighbor(grid_pos.x, size, neighbor_size);
+        let scaled_y = scale_coord_to_neighbor(grid_pos.y, size, neighbor_size);
+        let neighbor_pos = vec3<i32>(scaled_x, scaled_y, 0);
+        return sampleLightSegment(SEGMENT_PZ, neighbor_pos, neighbor_res);
+    }
+
+    // Sample from current chunk
+    return sampleLightSegment(SEGMENT_CURRENT, grid_pos, chunk_resolution.x);
 }
 
 // Sample light data with trilinear interpolation

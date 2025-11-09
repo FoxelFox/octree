@@ -219,7 +219,7 @@ fn get_voxel_density_safe(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -
     let size = (grid_size + 1) as i32;
     if pos[0] < 0 || pos[1] < 0 || pos[2] < 0 || pos[0] >= size || pos[1] >= size || pos[2] >= size
     {
-        return 1.0; // Outside bounds = solid
+        return 0.0; // Outside bounds = air
     }
     get_voxel_density(
         voxels,
@@ -308,12 +308,49 @@ fn interpolate_normal(n1: [f32; 3], n2: [f32; 3], val1: f32, val2: f32) -> [f32;
 }
 
 fn calculate_gradient(voxels: &[VoxelData], pos: [i32; 3], grid_size: u32) -> [f32; 3] {
-    let dx = get_voxel_density_safe(voxels, [pos[0] + 1, pos[1], pos[2]], grid_size)
-        - get_voxel_density_safe(voxels, [pos[0] - 1, pos[1], pos[2]], grid_size);
-    let dy = get_voxel_density_safe(voxels, [pos[0], pos[1] + 1, pos[2]], grid_size)
-        - get_voxel_density_safe(voxels, [pos[0], pos[1] - 1, pos[2]], grid_size);
-    let dz = get_voxel_density_safe(voxels, [pos[0], pos[1], pos[2] + 1], grid_size)
-        - get_voxel_density_safe(voxels, [pos[0], pos[1], pos[2] - 1], grid_size);
+    let max_pos = grid_size as i32;
+
+    // Use one-sided differences at boundaries, central differences in interior
+    // One-sided differences are scaled by 2x to match central difference magnitude
+
+    // X gradient
+    let dx = if pos[0] == 0 {
+        // Forward difference at min boundary (scaled 2x)
+        2.0 * (get_voxel_density(voxels, [1, pos[1] as u32, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [0, pos[1] as u32, pos[2] as u32], grid_size))
+    } else if pos[0] == max_pos {
+        // Backward difference at max boundary (scaled 2x)
+        2.0 * (get_voxel_density(voxels, [max_pos as u32, pos[1] as u32, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [(max_pos - 1) as u32, pos[1] as u32, pos[2] as u32], grid_size))
+    } else {
+        // Central difference in interior
+        get_voxel_density(voxels, [(pos[0] + 1) as u32, pos[1] as u32, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [(pos[0] - 1) as u32, pos[1] as u32, pos[2] as u32], grid_size)
+    };
+
+    // Y gradient
+    let dy = if pos[1] == 0 {
+        2.0 * (get_voxel_density(voxels, [pos[0] as u32, 1, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, 0, pos[2] as u32], grid_size))
+    } else if pos[1] == max_pos {
+        2.0 * (get_voxel_density(voxels, [pos[0] as u32, max_pos as u32, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, (max_pos - 1) as u32, pos[2] as u32], grid_size))
+    } else {
+        get_voxel_density(voxels, [pos[0] as u32, (pos[1] + 1) as u32, pos[2] as u32], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, (pos[1] - 1) as u32, pos[2] as u32], grid_size)
+    };
+
+    // Z gradient
+    let dz = if pos[2] == 0 {
+        2.0 * (get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, 1], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, 0], grid_size))
+    } else if pos[2] == max_pos {
+        2.0 * (get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, max_pos as u32], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (max_pos - 1) as u32], grid_size))
+    } else {
+        get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (pos[2] + 1) as u32], grid_size)
+            - get_voxel_density(voxels, [pos[0] as u32, pos[1] as u32, (pos[2] - 1) as u32], grid_size)
+    };
 
     let gradient = [dx, dy, dz];
     let length = (dx * dx + dy * dy + dz * dz).sqrt();

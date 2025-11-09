@@ -288,6 +288,10 @@ export class Light {
 					binding: 1,
 					resource: {buffer: chunkResolutionBuffer},
 				},
+				{
+					binding: 2,
+					resource: {buffer: neighborLODBuffer},
+				},
 			],
 		});
 

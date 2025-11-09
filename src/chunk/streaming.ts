@@ -1,5 +1,5 @@
 import {Chunk} from './chunk';
-import {camera, device, gpu, gridSize, scheduler} from '../index';
+import {camera, contextUniform, device, gpu, gridSize, scheduler} from '../index';
 import {Cull} from '../pipeline/rendering/cull';
 import {Block} from '../pipeline/rendering/block';
 import {Light} from '../pipeline/rendering/light';
@@ -17,6 +17,103 @@ interface GenerationTask {
 	chunk: Chunk;
 	progress: number;
 	noiseResult?: any; // Result from webworker noise generation
+}
+
+// Frustum plane representation (ax + by + cz + d = 0)
+class FrustumPlane {
+	a: number;
+	b: number;
+	c: number;
+	d: number;
+
+	constructor(a: number, b: number, c: number, d: number) {
+		// Normalize the plane
+		const length = Math.sqrt(a * a + b * b + c * c);
+		this.a = a / length;
+		this.b = b / length;
+		this.c = c / length;
+		this.d = d / length;
+	}
+
+	// Calculate signed distance from point to plane
+	distanceToPoint(x: number, y: number, z: number): number {
+		return this.a * x + this.b * y + this.c * z + this.d;
+	}
+}
+
+class Frustum {
+	planes: FrustumPlane[] = [];
+
+	// Extract frustum planes from view-projection matrix
+	// Matrix is in column-major order as used by wgpu-matrix
+	extractFromViewProjection(vp: Float32Array) {
+		this.planes = [];
+
+		// Left plane: vp[3] + vp[0], vp[7] + vp[4], vp[11] + vp[8], vp[15] + vp[12]
+		this.planes.push(new FrustumPlane(
+			vp[3] + vp[0],
+			vp[7] + vp[4],
+			vp[11] + vp[8],
+			vp[15] + vp[12]
+		));
+
+		// Right plane: vp[3] - vp[0], vp[7] - vp[4], vp[11] - vp[8], vp[15] - vp[12]
+		this.planes.push(new FrustumPlane(
+			vp[3] - vp[0],
+			vp[7] - vp[4],
+			vp[11] - vp[8],
+			vp[15] - vp[12]
+		));
+
+		// Bottom plane: vp[3] + vp[1], vp[7] + vp[5], vp[11] + vp[9], vp[15] + vp[13]
+		this.planes.push(new FrustumPlane(
+			vp[3] + vp[1],
+			vp[7] + vp[5],
+			vp[11] + vp[9],
+			vp[15] + vp[13]
+		));
+
+		// Top plane: vp[3] - vp[1], vp[7] - vp[5], vp[11] - vp[9], vp[15] - vp[13]
+		this.planes.push(new FrustumPlane(
+			vp[3] - vp[1],
+			vp[7] - vp[5],
+			vp[11] - vp[9],
+			vp[15] - vp[13]
+		));
+
+		// Near plane: vp[3] + vp[2], vp[7] + vp[6], vp[11] + vp[10], vp[15] + vp[14]
+		this.planes.push(new FrustumPlane(
+			vp[3] + vp[2],
+			vp[7] + vp[6],
+			vp[11] + vp[10],
+			vp[15] + vp[14]
+		));
+
+		// Far plane: vp[3] - vp[2], vp[7] - vp[6], vp[11] - vp[10], vp[15] - vp[14]
+		this.planes.push(new FrustumPlane(
+			vp[3] - vp[2],
+			vp[7] - vp[6],
+			vp[11] - vp[10],
+			vp[15] - vp[14]
+		));
+	}
+
+	// Test if an axis-aligned bounding box intersects with the frustum
+	// Returns true if the box is at least partially inside the frustum
+	intersectsAABB(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): boolean {
+		for (const plane of this.planes) {
+			// Find the positive vertex (furthest along plane normal)
+			const pX = plane.a >= 0 ? maxX : minX;
+			const pY = plane.b >= 0 ? maxY : minY;
+			const pZ = plane.c >= 0 ? maxZ : minZ;
+
+			// If the positive vertex is behind the plane, the box is completely outside
+			if (plane.distanceToPoint(pX, pY, pZ) < 0) {
+				return false;
+			}
+		}
+		return true;
+	}
 }
 
 export class Streaming {
@@ -46,8 +143,10 @@ export class Streaming {
 	nextChunkId = 1;
 	activeChunks = new Set<Chunk>();
 	// LOD 2: distance > LOD_THRESHOLDS[1] (lowest quality)
-	private readonly LOD_THRESHOLDS = [1.5, 3.5];
+	private readonly LOD_THRESHOLDS = [2.5, 5];
 	private readonly LOD_HYSTERESIS = 0.2;
+	private frustum = new Frustum();
+	private frustumReady = false;
 
 	get cameraPositionInGridSpace(): number[] {
 		return [
@@ -137,16 +236,6 @@ export class Streaming {
 
 		// Set up chunk getter for voxel editor
 		this.voxelEditorHandler.setChunkGetter((position) => this.getChunkAt(position));
-
-		// Calculate player's initial chunk position
-		const playerChunkPos = this.cameraPositionInGridSpace;
-
-
-		// Initialize active chunks with the current position
-		this.updateActiveChunks(playerChunkPos);
-
-		// Queue surrounding chunks for async generation
-		this.queueChunksAroundPosition(playerChunkPos);
 	}
 
 	queueChunksAroundPosition(centerPos: number[]) {
@@ -173,8 +262,12 @@ export class Streaming {
 					(camZ - chunkCenterZ) ** 2
 				) / gridSize;
 
-				// Only queue chunks within circular distance
-				if (distance <= this.renderDistance) {
+				// Only queue chunks within circular distance and in the frustum
+				// Use a more generous distance check for frustum (add 1 chunk margin) to preload nearby chunks
+				const inFrustum = this.isChunkInFrustum(chunkPos);
+				const shouldQueue = distance <= this.renderDistance && (inFrustum || distance <= 2);
+
+				if (shouldQueue) {
 					const chunkIndex = this.map3D1D(chunkPos);
 
 					// Check if this position has any LOD chunks
@@ -210,37 +303,33 @@ export class Streaming {
 			currentTask = this.pendingGenerations[0];
 		}
 
-		// Process generation task without awaiting (non-blocking)
-		this.advanceGeneration(currentTask).then((completed) => {
-			if (completed) {
-				// Remove the completed task
-				const index = this.pendingGenerations.indexOf(currentTask);
-				if (index !== -1) {
-					this.pendingGenerations.splice(index, 1);
-				}
-			} else {
-				// Move task to end of queue if not completed
-				const index = this.pendingGenerations.indexOf(currentTask);
-				if (index !== -1) {
-					this.pendingGenerations.splice(index, 1);
-					this.pendingGenerations.push(currentTask);
-				}
-			}
-		}).catch((error) => {
-			console.error('Error in chunk generation:', error);
+		// Process generation task synchronously
+		const completed = this.advanceGeneration(currentTask);
+
+		if (completed) {
+			// Remove the completed task
 			const index = this.pendingGenerations.indexOf(currentTask);
 			if (index !== -1) {
 				this.pendingGenerations.splice(index, 1);
 			}
-			this.inProgressGenerations.delete(currentTask.index);
-		});
+		} else {
+			// Move task to end of queue if not completed
+			const index = this.pendingGenerations.indexOf(currentTask);
+			if (index !== -1) {
+				this.pendingGenerations.splice(index, 1);
+				this.pendingGenerations.push(currentTask);
+			}
+		}
 	}
 
 	update(updateEncoder: GPUCommandEncoder) {
 		const center = this.cameraPositionInGridSpace;
 		const octant = this.cameraOctantInChunk;
 
-		// Process one chunk from generation queue per frame (non-blocking)
+		// Update frustum planes for culling
+		this.updateFrustum();
+
+		// Process one chunk from generation queue per frame
 		this.processGenerationQueue();
 
 		// Check and update LOD for existing chunks
@@ -297,8 +386,8 @@ export class Streaming {
 					(camZ - chunkCenterZ) ** 2
 				) / gridSize;
 
-				// Only activate chunks within circular distance
-				if (distance <= this.renderDistance) {
+				// Only activate chunks within circular distance and in the frustum
+				if (distance <= this.renderDistance && this.isChunkInFrustum(chunkPos)) {
 					const chunkIndex = this.map3D1D(chunkPos);
 					activePositions.add(chunkIndex);
 
@@ -407,6 +496,36 @@ export class Streaming {
 		return Math.sqrt(dx * dx + dy * dy + dz * dz) / gridSize;
 	}
 
+	// Check if a chunk at the given position is visible in the camera frustum
+	private isChunkInFrustum(position: number[]): boolean {
+		// Skip frustum culling if not ready yet (first few frames)
+		if (!this.frustumReady) {
+			return true;
+		}
+
+		// Calculate chunk bounds in world space
+		const minX = position[0] * gridSize;
+		const minY = position[1] * gridSize;
+		const minZ = position[2] * gridSize;
+		const maxX = (position[0] + 1) * gridSize;
+		const maxY = (position[1] + 1) * gridSize;
+		const maxZ = (position[2] + 1) * gridSize;
+
+		// Test against frustum
+		return this.frustum.intersectsAABB(minX, minY, minZ, maxX, maxY, maxZ);
+	}
+
+	// Update frustum planes from current view-projection matrix
+	private updateFrustum() {
+		// Get view-projection matrix from context uniform
+		// The view-projection matrix is stored at offset 12 (after 10 floats + 2 padding)
+		// and is 4x4 = 16 floats
+		const vpOffset = 12 + 16 + 16 + 16 + 16; // Skip to view_projection matrix
+		const vp = contextUniform.uniformArray.slice(vpOffset, vpOffset + 16);
+		this.frustum.extractFromViewProjection(vp);
+		this.frustumReady = true;
+	}
+
 	private initializeChunk(position: number[], forceLOD?: number): Chunk {
 		const chunkId = this.nextChunkId++;
 		const distance = this.calculateChunkDistance(position);
@@ -439,7 +558,6 @@ export class Streaming {
 					const nextLOD = 1;
 					const nextChunkKey = this.getChunkKey(position, nextLOD);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						console.log(`[LOD] Camera moved closer to [${position[0]},${position[1]},${position[2]}], distance=${distance.toFixed(2)}, queueing LOD 1...`);
 						this.queueChunkGeneration(position, nextLOD);
 					}
 				} else if (activeLod === 1 && distance <= this.LOD_THRESHOLDS[0] + this.LOD_HYSTERESIS) {
@@ -447,7 +565,6 @@ export class Streaming {
 					const nextLOD = 0;
 					const nextChunkKey = this.getChunkKey(position, nextLOD);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						console.log(`[LOD] Camera moved closer to [${position[0]},${position[1]},${position[2]}], distance=${distance.toFixed(2)}, queueing LOD 0...`);
 						this.queueChunkGeneration(position, nextLOD);
 					}
 				}
@@ -464,7 +581,6 @@ export class Streaming {
 
 						if (distance <= adjustedThreshold) {
 							// Distance is within range for this LOD - switch to it
-							console.log(`[LOD] Upgrading [${position[0]},${position[1]},${position[2]}] from LOD ${activeLod} to LOD ${lod} (distance=${distance.toFixed(2)} <= ${adjustedThreshold.toFixed(2)})`);
 							this.activeLOD.set(posIndex, lod);
 							this.pendingCullingChunks.delete(lodChunk);
 
@@ -488,7 +604,6 @@ export class Streaming {
 					if (targetLOD > activeLod) {
 						const targetChunk = lodMap.get(targetLOD);
 						if (targetChunk && this.isChunkReadyToRender(targetChunk)) {
-							console.log(`[LOD] Downgrading [${position[0]},${position[1]},${position[2]}] from LOD ${activeLod} to LOD ${targetLOD} (distance=${distance.toFixed(2)})`);
 							this.activeLOD.set(posIndex, targetLOD);
 							this.pendingCullingChunks.delete(targetChunk);
 
@@ -544,6 +659,7 @@ export class Streaming {
 				const aVecZ = aCenterZ - camZ;
 				const aDist = Math.sqrt(aVecX * aVecX + aVecZ * aVecZ);
 				const aDot = (aVecX * viewDirX + aVecZ * viewDirZ) / (aDist || 1);
+				const aDistInChunks = aDist / gridSize;
 
 				const bCenterX = (b[0] + 0.5) * gridSize;
 				const bCenterZ = (b[2] + 0.5) * gridSize;
@@ -551,11 +667,15 @@ export class Streaming {
 				const bVecZ = bCenterZ - camZ;
 				const bDist = Math.sqrt(bVecX * bVecX + bVecZ * bVecZ);
 				const bDot = (bVecX * viewDirX + bVecZ * viewDirZ) / (bDist || 1);
+				const bDistInChunks = bDist / gridSize;
 
-				// Prioritize chunks in view direction (higher dot product)
-				// then by distance (closer is better)
-				const aScore = aDot - aDist * 0.1;
-				const bScore = bDot - bDist * 0.1;
+				// Prioritize chunks in view direction (higher dot product) with balanced distance penalty
+				// Score = viewDirection * 3.0 - distance_in_chunks * 0.5
+				// This gives strong preference to chunks in front while still considering distance
+				// Example: chunk 4 units ahead: 3.0 - 2.0 = 1.0
+				//          chunk 1 unit behind: -3.0 - 0.5 = -3.5
+				const aScore = aDot * 3.0 - aDistInChunks * 0.5;
+				const bScore = bDot * 3.0 - bDistInChunks * 0.5;
 
 				return bScore - aScore;
 			});
@@ -577,7 +697,6 @@ export class Streaming {
 			if (queueEntry.length === 4) {
 				// Explicit LOD was specified in the queue
 				lodToGenerate = queueEntry[3];
-				console.log(`[LOD] Processing queue entry for [${position[0]},${position[1]},${position[2]}] with explicit LOD ${lodToGenerate}`);
 			} else if (!hasAnyLOD) {
 				// New position: always start with LOD 2 (lowest detail, fastest)
 				lodToGenerate = 2;
@@ -586,7 +705,6 @@ export class Streaming {
 				// This should rarely happen - calculate from current distance
 				const distance = this.calculateChunkDistance(position);
 				lodToGenerate = this.calculateLODForDistance(distance);
-				console.log(`[LOD] Queue entry for [${position[0]},${position[1]},${position[2]}] without explicit LOD, using distance-based LOD ${lodToGenerate}`);
 			}
 
 			// Check if this specific LOD already exists or is generating
@@ -664,7 +782,7 @@ export class Streaming {
 		});
 	}
 
-	private async advanceGeneration(task: GenerationTask): Promise<boolean> {
+	private advanceGeneration(task: GenerationTask): boolean {
 		switch (task.stage) {
 			case 'gpu_upload': {
 				const chunk = task.chunk;
@@ -727,7 +845,6 @@ export class Streaming {
 					// Add the new chunk to pendingCullingChunks so culling runs on it
 					// This allows us to check if it's ready in checkAndUpdateChunkLOD
 					this.pendingCullingChunks.add(chunk);
-					console.log(`[LOD] Added LOD ${lod} chunk at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}] to pendingCulling (active LOD is ${currentActiveLod})`);
 				}
 
 				// Invalidate culling for the new chunk and its neighbors
@@ -747,7 +864,6 @@ export class Streaming {
 					// Just finished LOD 2, check if we're close enough for LOD 1 (with hysteresis buffer)
 					const nextLOD = 1;
 					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					console.log(`[LOD] Finished LOD 2 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], distance=${currentDistance.toFixed(2)}, queueing LOD 1...`);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
 						this.queueChunkGeneration(chunk.position, nextLOD);
 					}
@@ -755,7 +871,6 @@ export class Streaming {
 					// Just finished LOD 1, check if we're very close for LOD 0 (with hysteresis buffer)
 					const nextLOD = 0;
 					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					console.log(`[LOD] Finished LOD 1 at [${chunk.position[0]},${chunk.position[1]},${chunk.position[2]}], distance=${currentDistance.toFixed(2)}, queueing LOD 0...`);
 					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
 						this.queueChunkGeneration(chunk.position, nextLOD);
 					}
