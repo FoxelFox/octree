@@ -271,6 +271,58 @@ fn interpolate_vertex(p1: [f32; 3], p2: [f32; 3], val1: f32, val2: f32) -> [f32;
     ]
 }
 
+/// Smooth interpolation helper (smoothstep)
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Calculate color based on height and slope for realistic terrain materials
+fn calculate_terrain_color(world_pos: [f32; 3], normal: [f32; 3]) -> u32 {
+    // Calculate slope from normal's Y component (1.0 = flat, 0.0 = vertical)
+    let flatness = normal[1].abs();
+    let slope = (1.0 - flatness).clamp(0.0, 1.0);
+
+    // Height factor normalized (terrain roughly -100 to 220)
+    let height_factor = ((world_pos[1] + 100.0) / 320.0).clamp(0.0, 1.0);
+
+    // Define base material colors (RGB floats)
+    let sand = (194.0, 178.0, 128.0);      // Low elevation
+    let grass = (85.0, 140.0, 50.0);       // Mid elevation
+    let rock = (120.0, 115.0, 100.0);      // Steep slopes
+    let snow = (240.0, 240.0, 245.0);      // High elevation
+
+    // Calculate material weights with smooth transitions
+    let grass_weight = smoothstep(0.2, 0.4, height_factor) * (1.0 - smoothstep(0.6, 0.75, height_factor));
+    let snow_weight = smoothstep(0.65, 0.8, height_factor) * (1.0 - slope);
+    let rock_weight = smoothstep(0.35, 0.6, slope) + smoothstep(0.75, 0.85, height_factor) * slope;
+    let sand_weight = 1.0 - smoothstep(0.15, 0.35, height_factor);
+
+    // Normalize weights
+    let total = grass_weight + snow_weight + rock_weight + sand_weight + 0.001;
+    let grass_w = grass_weight / total;
+    let snow_w = snow_weight / total;
+    let rock_w = rock_weight / total;
+    let sand_w = sand_weight / total;
+
+    // Blend materials
+    let mut color = (0.0, 0.0, 0.0);
+    color.0 = sand.0 * sand_w + grass.0 * grass_w + rock.0 * rock_w + snow.0 * snow_w;
+    color.1 = sand.1 * sand_w + grass.1 * grass_w + rock.1 * rock_w + snow.1 * snow_w;
+    color.2 = sand.2 * sand_w + grass.2 * grass_w + rock.2 * rock_w + snow.2 * snow_w;
+
+    // Add subtle spatial variation
+    let noise_seed = ((world_pos[0] * 0.3 + world_pos[2] * 0.7) as i32 % 17) as f32 / 17.0;
+    let variation = 0.92 + noise_seed * 0.16; // 0.92 to 1.08
+
+    let r = (color.0 * variation).clamp(0.0, 255.0) as u32;
+    let g = (color.1 * variation).clamp(0.0, 255.0) as u32;
+    let b = (color.2 * variation).clamp(0.0, 255.0) as u32;
+
+    // Pack as ARGB (0xAABBGGRR in little endian)
+    0xFF000000 | (b << 16) | (g << 8) | r
+}
+
 fn interpolate_normal(n1: [f32; 3], n2: [f32; 3], val1: f32, val2: f32) -> [f32; 3] {
     // Optimized: isolevel is always 0.0, inlined normalization, removed redundant checks
     let delta = val2 - val1;
@@ -676,12 +728,13 @@ pub fn generate_mesh(
                                         cube_values[v2],
                                     );
 
-                                    // Use hard color edges - pick the color from the "inside" vertex (negative density)
-                                    color_list[i] = if cube_values[v1] < cube_values[v2] {
-                                        cube_colors[v1] // v1 is more "inside"
-                                    } else {
-                                        cube_colors[v2] // v2 is more "inside"
-                                    };
+                                    // Calculate color based on world position and surface normal
+                                    let world_vertex_pos = [
+                                        vertex_list[i][0] + chunk_world_pos[0] as f32,
+                                        vertex_list[i][1] + chunk_world_pos[1] as f32,
+                                        vertex_list[i][2] + chunk_world_pos[2] as f32,
+                                    ];
+                                    color_list[i] = calculate_terrain_color(world_vertex_pos, normal_list[i]);
                                 }
                             }
 
