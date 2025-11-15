@@ -5,6 +5,8 @@ import {Block} from '../pipeline/rendering/block';
 import {Light} from '../pipeline/rendering/light';
 import {VoxelEditorHandler} from '../ui/voxel-editor';
 import {VoxelEditor} from '../pipeline/generation/voxel_editor';
+import {Frustum} from './frustum';
+import {LODManager} from './lod-manager';
 
 type GenerationStage = 'gpu_upload' | 'light' | 'finalize';
 
@@ -17,103 +19,6 @@ interface GenerationTask {
 	chunk: Chunk;
 	progress: number;
 	noiseResult?: any; // Result from webworker noise generation
-}
-
-// Frustum plane representation (ax + by + cz + d = 0)
-class FrustumPlane {
-	a: number;
-	b: number;
-	c: number;
-	d: number;
-
-	constructor(a: number, b: number, c: number, d: number) {
-		// Normalize the plane
-		const length = Math.sqrt(a * a + b * b + c * c);
-		this.a = a / length;
-		this.b = b / length;
-		this.c = c / length;
-		this.d = d / length;
-	}
-
-	// Calculate signed distance from point to plane
-	distanceToPoint(x: number, y: number, z: number): number {
-		return this.a * x + this.b * y + this.c * z + this.d;
-	}
-}
-
-class Frustum {
-	planes: FrustumPlane[] = [];
-
-	// Extract frustum planes from view-projection matrix
-	// Matrix is in column-major order as used by wgpu-matrix
-	extractFromViewProjection(vp: Float32Array) {
-		this.planes = [];
-
-		// Left plane: vp[3] + vp[0], vp[7] + vp[4], vp[11] + vp[8], vp[15] + vp[12]
-		this.planes.push(new FrustumPlane(
-			vp[3] + vp[0],
-			vp[7] + vp[4],
-			vp[11] + vp[8],
-			vp[15] + vp[12]
-		));
-
-		// Right plane: vp[3] - vp[0], vp[7] - vp[4], vp[11] - vp[8], vp[15] - vp[12]
-		this.planes.push(new FrustumPlane(
-			vp[3] - vp[0],
-			vp[7] - vp[4],
-			vp[11] - vp[8],
-			vp[15] - vp[12]
-		));
-
-		// Bottom plane: vp[3] + vp[1], vp[7] + vp[5], vp[11] + vp[9], vp[15] + vp[13]
-		this.planes.push(new FrustumPlane(
-			vp[3] + vp[1],
-			vp[7] + vp[5],
-			vp[11] + vp[9],
-			vp[15] + vp[13]
-		));
-
-		// Top plane: vp[3] - vp[1], vp[7] - vp[5], vp[11] - vp[9], vp[15] - vp[13]
-		this.planes.push(new FrustumPlane(
-			vp[3] - vp[1],
-			vp[7] - vp[5],
-			vp[11] - vp[9],
-			vp[15] - vp[13]
-		));
-
-		// Near plane: vp[3] + vp[2], vp[7] + vp[6], vp[11] + vp[10], vp[15] + vp[14]
-		this.planes.push(new FrustumPlane(
-			vp[3] + vp[2],
-			vp[7] + vp[6],
-			vp[11] + vp[10],
-			vp[15] + vp[14]
-		));
-
-		// Far plane: vp[3] - vp[2], vp[7] - vp[6], vp[11] - vp[10], vp[15] - vp[14]
-		this.planes.push(new FrustumPlane(
-			vp[3] - vp[2],
-			vp[7] - vp[6],
-			vp[11] - vp[10],
-			vp[15] - vp[14]
-		));
-	}
-
-	// Test if an axis-aligned bounding box intersects with the frustum
-	// Returns true if the box is at least partially inside the frustum
-	intersectsAABB(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): boolean {
-		for (const plane of this.planes) {
-			// Find the positive vertex (furthest along plane normal)
-			const pX = plane.a >= 0 ? maxX : minX;
-			const pY = plane.b >= 0 ? maxY : minY;
-			const pZ = plane.c >= 0 ? maxZ : minZ;
-
-			// If the positive vertex is behind the plane, the box is completely outside
-			if (plane.distanceToPoint(pX, pY, pZ) < 0) {
-				return false;
-			}
-		}
-		return true;
-	}
 }
 
 export class Streaming {
@@ -142,9 +47,7 @@ export class Streaming {
 	voxelEditorHandler = new VoxelEditorHandler(gpu, this.voxelEditor);
 	nextChunkId = 1;
 	activeChunks = new Set<Chunk>();
-	// LOD 2: distance > LOD_THRESHOLDS[1] (lowest quality)
-	private readonly LOD_THRESHOLDS = [0.5, 2.5];
-	private readonly LOD_HYSTERESIS = 0.5;
+	private lodManager = new LODManager();
 	private frustum = new Frustum();
 	private frustumReady = false;
 
@@ -227,6 +130,62 @@ export class Streaming {
 		}
 
 		return neighbors;
+	}
+
+	/**
+	 * Check if a chunk at the given position and LOD is already queued or generating
+	 * @param position Chunk position coordinates
+	 * @param lod LOD level to check
+	 * @returns true if the chunk is queued or currently generating
+	 */
+	private isGeneratingOrQueued(position: number[], lod: number): boolean {
+		const chunkKey = this.getChunkKey(position, lod);
+		return this.inProgressGenerations.has(chunkKey) || this.queuedChunks.has(chunkKey);
+	}
+
+	/**
+	 * Invalidate lighting for all neighbors of a chunk
+	 * Called when a chunk's LOD changes to ensure neighbors resample lighting
+	 * @param chunk The chunk whose neighbors should have lighting invalidated
+	 */
+	private invalidateNeighborLighting(chunk: Chunk): void {
+		const neighbors = this.getNeighborChunks(chunk);
+		for (const neighbor of neighbors) {
+			this.light.invalidate(neighbor);
+		}
+	}
+
+	/**
+	 * Get the LOD levels of the 6 adjacent neighbors (not diagonal)
+	 * Order: -X, +X, -Y, +Y, -Z, +Z
+	 * @param position Chunk position coordinates
+	 * @returns Array of 6 LOD levels, -1 if neighbor doesn't exist
+	 */
+	private getNeighborLODs(position: number[]): number[] {
+		const neighborLODs = new Array(6).fill(-1);
+		const neighborOffsets = [
+			[-1, 0, 0], // -X
+			[1, 0, 0],  // +X
+			[0, -1, 0], // -Y
+			[0, 1, 0],  // +Y
+			[0, 0, -1], // -Z
+			[0, 0, 1],  // +Z
+		];
+
+		for (let i = 0; i < 6; i++) {
+			const neighborPos = [
+				position[0] + neighborOffsets[i][0],
+				position[1] + neighborOffsets[i][1],
+				position[2] + neighborOffsets[i][2],
+			];
+			const neighborIndex = this.map3D1D(neighborPos);
+			const neighborActiveLOD = this.activeLOD.get(neighborIndex);
+			if (neighborActiveLOD !== undefined) {
+				neighborLODs[i] = neighborActiveLOD;
+			}
+		}
+
+		return neighborLODs;
 	}
 
 	init() {
@@ -446,55 +405,6 @@ export class Streaming {
 		}
 	}
 
-	private calculateLODForDistance(distance: number): number {
-		// LOD levels: 0 = full resolution, 1 = half, 2 = quarter
-		for (let lod = 0; lod < this.LOD_THRESHOLDS.length; lod++) {
-			if (distance <= this.LOD_THRESHOLDS[lod]) {
-				return lod;
-			}
-		}
-		return this.LOD_THRESHOLDS.length;
-	}
-
-	private shouldUpdateLOD(currentLOD: number, distance: number): boolean {
-		// Calculate target LOD with hysteresis to prevent rapid switching
-		// Hysteresis makes it harder to change LOD - we need to be clearly past the threshold
-		let targetLOD = 0;
-		for (let lod = 0; lod < this.LOD_THRESHOLDS.length; lod++) {
-			const threshold = this.LOD_THRESHOLDS[lod];
-
-			// Apply hysteresis based on where we currently are
-			// If we're at a higher LOD (lod+1 or more), need to get clearly below threshold to upgrade
-			// If we're at a lower LOD (lod or less), need to get clearly above threshold to downgrade
-			let adjustedThreshold: number;
-			if (currentLOD > lod) {
-				// Currently at higher LOD than lod, need distance < threshold - hysteresis to upgrade
-				adjustedThreshold = threshold - this.LOD_HYSTERESIS;
-			} else {
-				// Currently at lower LOD than lod+1, need distance > threshold + hysteresis to downgrade
-				adjustedThreshold = threshold + this.LOD_HYSTERESIS;
-			}
-
-			if (distance > adjustedThreshold) {
-				targetLOD = lod + 1;
-			} else {
-				break;
-			}
-		}
-
-		return targetLOD !== currentLOD;
-	}
-
-	private calculateChunkDistance(position: number[]): number {
-		const chunkCenterX = (position[0] + 0.5) * gridSize;
-		const chunkCenterY = (position[1] + 0.5) * gridSize;
-		const chunkCenterZ = (position[2] + 0.5) * gridSize;
-
-		const dx = camera.position[0] - chunkCenterX;
-		const dy = camera.position[1] - chunkCenterY;
-		const dz = camera.position[2] - chunkCenterZ;
-		return Math.sqrt(dx * dx + dy * dy + dz * dz) / gridSize;
-	}
 
 	// Check if a chunk at the given position is visible in the camera frustum
 	private isChunkInFrustum(position: number[]): boolean {
@@ -528,10 +438,10 @@ export class Streaming {
 
 	private initializeChunk(position: number[], forceLOD?: number): Chunk {
 		const chunkId = this.nextChunkId++;
-		const distance = this.calculateChunkDistance(position);
+		const distance = this.lodManager.calculateChunkDistance(position);
 
 		// Use forced LOD if provided, otherwise calculate from distance
-		const lod = forceLOD !== undefined ? forceLOD : this.calculateLODForDistance(distance);
+		const lod = forceLOD !== undefined ? forceLOD : this.lodManager.calculateLODForDistance(distance);
 
 		return new Chunk(chunkId, position, lod);
 	}
@@ -544,76 +454,75 @@ export class Streaming {
 			if (!anyChunk) continue;
 
 			const position = anyChunk.position;
-
-			// Calculate current distance from camera
-			const distance = this.calculateChunkDistance(position);
-
-			// Get current active LOD
+			const distance = this.lodManager.calculateChunkDistance(position);
 			const activeLod = this.activeLOD.get(posIndex);
 
 			if (activeLod !== undefined) {
-				// 1. Check if we should GENERATE better LODs based on distance
-				if (activeLod === 2 && distance <= this.LOD_THRESHOLDS[1] + this.LOD_HYSTERESIS) {
-					// We're at LOD 2 but close enough for LOD 1 (with hysteresis buffer)
-					const nextLOD = 1;
-					const nextChunkKey = this.getChunkKey(position, nextLOD);
-					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						this.queueChunkGeneration(position, nextLOD);
-					}
-				} else if (activeLod === 1 && distance <= this.LOD_THRESHOLDS[0] + this.LOD_HYSTERESIS) {
-					// We're at LOD 1 but close enough for LOD 0 (with hysteresis buffer)
-					const nextLOD = 0;
-					const nextChunkKey = this.getChunkKey(position, nextLOD);
-					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						this.queueChunkGeneration(position, nextLOD);
-					}
+				// Queue generation of better LODs if needed
+				this.queueBetterLODsIfNeeded(position, activeLod, distance, lodMap);
+
+				// Try to switch to ready better LODs, or downgrade if too far
+				const switched = this.switchToReadyBetterLODs(posIndex, activeLod, distance, lodMap);
+				if (!switched) {
+					this.downgradeToWorseLODsIfNeeded(posIndex, activeLod, distance, lodMap);
 				}
+			}
+		}
+	}
 
-				// 2. Check if we should SWITCH to better LODs that are already ready
-				// Check if there's a better LOD available (0 is best, 2 is worst)
-				let switched = false;
-				for (let lod = 0; lod < activeLod; lod++) {
-					const lodChunk = lodMap.get(lod);
-					if (lodChunk && this.isChunkReadyToRender(lodChunk)) {
-						// Check if distance justifies this better LOD (with hysteresis)
-						const threshold = this.LOD_THRESHOLDS[lod];
-						const adjustedThreshold = threshold + this.LOD_HYSTERESIS; // Extend zone to make upgrade easier
+	/**
+	 * Queue generation of better LODs based on distance
+	 * @param position Chunk position coordinates
+	 * @param activeLod Currently active LOD level
+	 * @param distance Distance from camera to chunk
+	 * @param lodMap Map of available LOD levels for this position
+	 */
+	private queueBetterLODsIfNeeded(position: number[], activeLod: number, distance: number, lodMap: Map<number, Chunk>) {
+		const betterLOD = this.lodManager.shouldGenerateBetterLOD(activeLod, distance);
+		if (betterLOD !== null && !lodMap.has(betterLOD) && !this.isGeneratingOrQueued(position, betterLOD)) {
+			this.queueChunkGeneration(position, betterLOD);
+		}
+	}
 
-						if (distance <= adjustedThreshold) {
-							// Distance is within range for this LOD - switch to it
-							this.activeLOD.set(posIndex, lod);
-							this.pendingCullingChunks.delete(lodChunk);
-
-							// Invalidate lighting in neighbor chunks since they need to resample from new LOD
-							const neighbors = this.getNeighborChunks(lodChunk);
-							for (const neighbor of neighbors) {
-								this.light.invalidate(neighbor);
-							}
-
-							switched = true;
-							break; // Only upgrade one step at a time to avoid jumps
-						}
-					}
+	/**
+	 * Switch to a better LOD that's already ready
+	 * @param posIndex Position index in the grid
+	 * @param activeLod Currently active LOD level
+	 * @param distance Distance from camera to chunk
+	 * @param lodMap Map of available LOD levels for this position
+	 * @returns true if switched to a better LOD, false otherwise
+	 */
+	private switchToReadyBetterLODs(posIndex: number, activeLod: number, distance: number, lodMap: Map<number, Chunk>): boolean {
+		for (let lod = 0; lod < activeLod; lod++) {
+			const lodChunk = lodMap.get(lod);
+			if (lodChunk && this.isChunkReadyToRender(lodChunk)) {
+				if (this.lodManager.canUpgradeToLOD(lod, distance)) {
+					this.activeLOD.set(posIndex, lod);
+					this.pendingCullingChunks.delete(lodChunk);
+					this.invalidateNeighborLighting(lodChunk);
+					return true; // Only upgrade one step at a time
 				}
+			}
+		}
+		return false;
+	}
 
-				// 3. Check if we should DOWNGRADE to worse LODs when camera moves away
-				if (!switched && this.shouldUpdateLOD(activeLod, distance)) {
-					const targetLOD = this.calculateLODForDistance(distance);
-
-					// Only downgrade if target is worse (higher number) than current
-					if (targetLOD > activeLod) {
-						const targetChunk = lodMap.get(targetLOD);
-						if (targetChunk && this.isChunkReadyToRender(targetChunk)) {
-							this.activeLOD.set(posIndex, targetLOD);
-							this.pendingCullingChunks.delete(targetChunk);
-
-							// Invalidate lighting in neighbor chunks since they need to resample from new LOD
-							const neighbors = this.getNeighborChunks(targetChunk);
-							for (const neighbor of neighbors) {
-								this.light.invalidate(neighbor);
-							}
-						}
-					}
+	/**
+	 * Downgrade to a worse LOD when camera moves away
+	 * @param posIndex Position index in the grid
+	 * @param activeLod Currently active LOD level
+	 * @param distance Distance from camera to chunk
+	 * @param lodMap Map of available LOD levels for this position
+	 */
+	private downgradeToWorseLODsIfNeeded(posIndex: number, activeLod: number, distance: number, lodMap: Map<number, Chunk>) {
+		if (this.lodManager.shouldUpdateLOD(activeLod, distance)) {
+			const targetLOD = this.lodManager.calculateLODForDistance(distance);
+			if (targetLOD > activeLod) {
+				const targetChunk = lodMap.get(targetLOD);
+				if (targetChunk && this.isChunkReadyToRender(targetChunk)) {
+					this.activeLOD.set(posIndex, targetLOD);
+					this.pendingCullingChunks.delete(targetChunk);
+					this.invalidateNeighborLighting(targetChunk);
 				}
 			}
 		}
@@ -644,82 +553,22 @@ export class Streaming {
 	}
 
 	private fillGenerationTasks() {
-		// Sort generation queue by distance to camera and view direction (closest and in-view first)
-		if (this.generationQueue.length > 0) {
-			const camX = camera.position[0];
-			const camZ = camera.position[2];
-			// Calculate view direction from yaw
-			const viewDirX = Math.sin(camera.yaw);
-			const viewDirZ = Math.cos(camera.yaw);
-
-			this.generationQueue.sort((a, b) => {
-				const aCenterX = (a[0] + 0.5) * gridSize;
-				const aCenterZ = (a[2] + 0.5) * gridSize;
-				const aVecX = aCenterX - camX;
-				const aVecZ = aCenterZ - camZ;
-				const aDist = Math.sqrt(aVecX * aVecX + aVecZ * aVecZ);
-				const aDot = (aVecX * viewDirX + aVecZ * viewDirZ) / (aDist || 1);
-				const aDistInChunks = aDist / gridSize;
-
-				const bCenterX = (b[0] + 0.5) * gridSize;
-				const bCenterZ = (b[2] + 0.5) * gridSize;
-				const bVecX = bCenterX - camX;
-				const bVecZ = bCenterZ - camZ;
-				const bDist = Math.sqrt(bVecX * bVecX + bVecZ * bVecZ);
-				const bDot = (bVecX * viewDirX + bVecZ * viewDirZ) / (bDist || 1);
-				const bDistInChunks = bDist / gridSize;
-
-				// Prioritize chunks in view direction (higher dot product) with balanced distance penalty
-				// Score = viewDirection * 3.0 - distance_in_chunks * 0.5
-				// This gives strong preference to chunks in front while still considering distance
-				// Example: chunk 4 units ahead: 3.0 - 2.0 = 1.0
-				//          chunk 1 unit behind: -3.0 - 0.5 = -3.5
-				const aScore = aDot * 3.0 - aDistInChunks * 0.5;
-				const bScore = bDot * 3.0 - bDistInChunks * 0.5;
-
-				return bScore - aScore;
-			});
-		}
+		this.sortGenerationQueueByPriority();
 
 		// Start noise generation for chunks (not throttled - webworkers handle their own scheduling)
 		while (this.generationQueue.length > 0) {
 			const queueEntry = this.generationQueue.shift()!;
-
-			// Extract position and LOD (4th element is optional LOD)
 			const position = [queueEntry[0], queueEntry[1], queueEntry[2]];
 			const posIndex = this.map3D1D(position);
 			const lodMap = this.grid.get(posIndex);
-			const hasAnyLOD = lodMap && lodMap.size > 0;
 
 			// Determine which LOD to generate
-			let lodToGenerate: number;
-
-			if (queueEntry.length === 4) {
-				// Explicit LOD was specified in the queue
-				lodToGenerate = queueEntry[3];
-			} else if (!hasAnyLOD) {
-				// New position: always start with LOD 2 (lowest detail, fastest)
-				lodToGenerate = 2;
-			} else {
-				// Position has chunks but no explicit LOD specified
-				// This should rarely happen - calculate from current distance
-				const distance = this.calculateChunkDistance(position);
-				lodToGenerate = this.calculateLODForDistance(distance);
-			}
-
-			// Check if this specific LOD already exists or is generating
+			const lodToGenerate = this.determineLODToGenerate(queueEntry, position, lodMap);
 			const chunkKey = this.getChunkKey(position, lodToGenerate);
 			this.queuedChunks.delete(chunkKey);
 
-			if (lodMap?.has(lodToGenerate)) {
-				// This LOD already exists, skip
-				const generatingSet = this.generatingLODs.get(posIndex);
-				generatingSet?.delete(lodToGenerate);
-				continue;
-			}
-
-			// Skip if already generating this specific LOD
-			if (this.inProgressGenerations.has(chunkKey) || this.activeNoiseGenerations.has(chunkKey)) {
+			// Skip if this LOD already exists or is generating
+			if (!this.canStartGeneration(lodToGenerate, chunkKey, posIndex, lodMap)) {
 				continue;
 			}
 
@@ -729,35 +578,102 @@ export class Streaming {
 		}
 	}
 
+	/**
+	 * Sort generation queue by priority (view direction and distance)
+	 * Chunks in front of camera and closer are prioritized
+	 */
+	private sortGenerationQueueByPriority() {
+		if (this.generationQueue.length === 0) return;
+
+		const camX = camera.position[0];
+		const camZ = camera.position[2];
+		const viewDirX = Math.sin(camera.yaw);
+		const viewDirZ = Math.cos(camera.yaw);
+
+		this.generationQueue.sort((a, b) => {
+			const aScore = this.calculateChunkPriority(a, camX, camZ, viewDirX, viewDirZ);
+			const bScore = this.calculateChunkPriority(b, camX, camZ, viewDirX, viewDirZ);
+			return bScore - aScore;
+		});
+	}
+
+	/**
+	 * Calculate priority score for a chunk position
+	 * Higher score = higher priority (in view direction, closer to camera)
+	 * @param position Chunk position coordinates
+	 * @param camX Camera X position
+	 * @param camZ Camera Z position
+	 * @param viewDirX View direction X component
+	 * @param viewDirZ View direction Z component
+	 * @returns Priority score (higher is better)
+	 */
+	private calculateChunkPriority(position: number[], camX: number, camZ: number, viewDirX: number, viewDirZ: number): number {
+		const centerX = (position[0] + 0.5) * gridSize;
+		const centerZ = (position[2] + 0.5) * gridSize;
+		const vecX = centerX - camX;
+		const vecZ = centerZ - camZ;
+		const dist = Math.sqrt(vecX * vecX + vecZ * vecZ);
+		const dot = (vecX * viewDirX + vecZ * viewDirZ) / (dist || 1);
+		const distInChunks = dist / gridSize;
+
+		// Score = viewDirection * 3.0 - distance_in_chunks * 0.5
+		// Prioritize chunks in view direction with balanced distance penalty
+		return dot * 3.0 - distInChunks * 0.5;
+	}
+
+	/**
+	 * Determine which LOD level to generate for a queued chunk
+	 * @param queueEntry Queue entry (may contain explicit LOD as 4th element)
+	 * @param position Chunk position coordinates
+	 * @param lodMap Map of available LOD levels for this position
+	 * @returns LOD level to generate (0-2)
+	 */
+	private determineLODToGenerate(queueEntry: number[], position: number[], lodMap: Map<number, Chunk> | undefined): number {
+		// Explicit LOD was specified in the queue
+		if (queueEntry.length === 4) {
+			return queueEntry[3];
+		}
+
+		// New position: always start with LOD 2 (lowest detail, fastest)
+		if (!lodMap || lodMap.size === 0) {
+			return 2;
+		}
+
+		// Position has chunks but no explicit LOD specified - calculate from distance
+		const distance = this.lodManager.calculateChunkDistance(position);
+		return this.lodManager.calculateLODForDistance(distance);
+	}
+
+	/**
+	 * Check if we can start generation for this chunk
+	 * @param lod LOD level to generate
+	 * @param chunkKey Unique key for position + LOD
+	 * @param posIndex Position index in the grid
+	 * @param lodMap Map of available LOD levels for this position
+	 * @returns true if generation can start, false if already exists or generating
+	 */
+	private canStartGeneration(lod: number, chunkKey: number, posIndex: number, lodMap: Map<number, Chunk> | undefined): boolean {
+		// This LOD already exists
+		if (lodMap?.has(lod)) {
+			const generatingSet = this.generatingLODs.get(posIndex);
+			generatingSet?.delete(lod);
+			return false;
+		}
+
+		// Already generating this specific LOD
+		if (this.inProgressGenerations.has(chunkKey) || this.activeNoiseGenerations.has(chunkKey)) {
+			return false;
+		}
+
+		return true;
+	}
+
 	private startNoiseGeneration(position: number[], posIndex: number, lod: number, chunkKey: number) {
 		const chunk = this.initializeChunk(position, lod);
 
 		// Query neighbor LODs for transition geometry
-		// Order: -X, +X, -Y, +Y, -Z, +Z (use 255 for no neighbor)
-		const neighborLODs = new Array(6).fill(255);
-
-		// Check each neighbor position
-		const neighborOffsets = [
-			[-1, 0, 0], // -X
-			[1, 0, 0],  // +X
-			[0, -1, 0], // -Y
-			[0, 1, 0],  // +Y
-			[0, 0, -1], // -Z
-			[0, 0, 1],  // +Z
-		];
-
-		for (let i = 0; i < 6; i++) {
-			const neighborPos = [
-				position[0] + neighborOffsets[i][0],
-				position[1] + neighborOffsets[i][1],
-				position[2] + neighborOffsets[i][2],
-			];
-			const neighborIndex = this.map3D1D(neighborPos);
-			const neighborActiveLOD = this.activeLOD.get(neighborIndex);
-			if (neighborActiveLOD !== undefined) {
-				neighborLODs[i] = neighborActiveLOD;
-			}
-		}
+		// Order: -X, +X, -Y, +Y, -Z, +Z (use -1 for no neighbor)
+		const neighborLODs = this.getNeighborLODs(position);
 
 		scheduler.work("noise_for_chunk", [position[0], position[1], position[2], lod, neighborLODs]).then(res => {
 			this.activeNoiseGenerations.delete(chunkKey);
@@ -850,30 +766,17 @@ export class Streaming {
 				// Invalidate culling for the new chunk and its neighbors
 				const neighbors = this.getNeighborChunks(chunk);
 				this.cull.invalidateChunkAndNeighbors(chunk, neighbors);
-				for (const neighbor of neighbors) {
-					this.light.invalidate(neighbor);
-				}
+				this.invalidateNeighborLighting(chunk);
 
 				// Clean up tracking
 				this.inProgressGenerations.delete(task.chunkKey);
 
 				// Progressive LOD generation: Queue next LOD based on CURRENT distance from camera
-				const currentDistance = this.calculateChunkDistance(chunk.position);
+				const currentDistance = this.lodManager.calculateChunkDistance(chunk.position);
+				const betterLOD = this.lodManager.shouldGenerateBetterLOD(lod, currentDistance);
 
-				if (lod === 2 && currentDistance <= this.LOD_THRESHOLDS[1] + this.LOD_HYSTERESIS) {
-					// Just finished LOD 2, check if we're close enough for LOD 1 (with hysteresis buffer)
-					const nextLOD = 1;
-					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						this.queueChunkGeneration(chunk.position, nextLOD);
-					}
-				} else if (lod === 1 && currentDistance <= this.LOD_THRESHOLDS[0] + this.LOD_HYSTERESIS) {
-					// Just finished LOD 1, check if we're very close for LOD 0 (with hysteresis buffer)
-					const nextLOD = 0;
-					const nextChunkKey = this.getChunkKey(chunk.position, nextLOD);
-					if (!lodMap.has(nextLOD) && !this.inProgressGenerations.has(nextChunkKey) && !this.queuedChunks.has(nextChunkKey)) {
-						this.queueChunkGeneration(chunk.position, nextLOD);
-					}
+				if (betterLOD !== null && !lodMap.has(betterLOD) && !this.isGeneratingOrQueued(chunk.position, betterLOD)) {
+					this.queueChunkGeneration(chunk.position, betterLOD);
 				}
 
 				return true;
